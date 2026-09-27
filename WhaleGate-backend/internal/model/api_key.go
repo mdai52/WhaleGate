@@ -23,10 +23,20 @@ type APIKey struct {
 	// RequestCount 累计请求次数，转发结算时累加。
 	RequestCount int64 `gorm:"not null;default:0" json:"request_count"`
 	// TotalTokens 累计 token 消耗。
-	TotalTokens int64          `gorm:"not null;default:0" json:"total_tokens"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	TotalTokens int64 `gorm:"not null;default:0" json:"total_tokens"`
+	// GroupTag 分组标签，便于分类管理。
+	GroupTag string `gorm:"size:64;not null;default:''" json:"group_tag"`
+	// IPWhitelist IP 白名单（JSON 数组，支持 CIDR），空=不限制。
+	IPWhitelist string `gorm:"type:text;not null;default:'[]'" json:"ip_whitelist"`
+	// QuotaLimit 密钥级额度上限（点），0=不限。
+	QuotaLimit int64 `gorm:"not null;default:0" json:"quota_limit"`
+	// UsedPoints 该密钥累计消耗点数。
+	UsedPoints int64 `gorm:"not null;default:0" json:"used_points"`
+	// AllowedModels 模型白名单（JSON 数组），空=不限制。
+	AllowedModels string         `gorm:"type:text;not null;default:'[]'" json:"allowed_models"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // TableName 表名。

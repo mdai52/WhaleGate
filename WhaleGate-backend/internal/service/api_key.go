@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +38,16 @@ type KeyIdentity struct {
 	ExpiresAtUnix int64 `json:"exp"`
 	// Revoked 是否已吊销。
 	Revoked bool `json:"rev"`
+	// GroupTag 分组标签。
+	GroupTag string `json:"grp"`
+	// QuotaLimit 密钥级额度上限（点），0=不限。
+	QuotaLimit int64 `json:"qlimit"`
+	// UsedPoints 累计消耗点数（来自缓存快照，可能略有延迟）。
+	UsedPoints int64 `json:"upoints"`
+	// AllowedModels 模型白名单，空=不限制。
+	AllowedModels []string `json:"models"`
+	// IPWhitelist IP 白名单（IP 或 CIDR），空=不限制。
+	IPWhitelist []string `json:"ips"`
 }
 
 // UsableNow 判断当前是否可用。
@@ -66,7 +78,57 @@ func (k *KeyIdentity) RejectErrno() apierr.Errno {
 	if k.UserStatus != constant.StatusEnabled {
 		return apierr.ErrUserDisabled
 	}
+	if k.QuotaExceeded() {
+		return apierr.ErrQuotaExceeded
+	}
 	return apierr.Errno{}
+}
+
+// IPAllowed 判断来源 IP 是否在白名单内；白名单为空表示不限制。
+// 支持 IPv4/IPv6 精确值与 CIDR 段（如 10.0.0.0/8）。
+func (k *KeyIdentity) IPAllowed(ip string) bool {
+	list := k.IPWhitelist
+	if len(list) == 0 {
+		return true
+	}
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return false
+	}
+	for _, item := range list {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			if _, cidr, err := net.ParseCIDR(item); err == nil && cidr.Contains(parsed) {
+				return true
+			}
+			continue
+		}
+		if itemIP := net.ParseIP(item); itemIP != nil && itemIP.Equal(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// ModelAllowed 判断模型是否在白名单内；白名单为空表示不限制。
+func (k *KeyIdentity) ModelAllowed(model string) bool {
+	if len(k.AllowedModels) == 0 {
+		return true
+	}
+	for _, m := range k.AllowedModels {
+		if m == model {
+			return true
+		}
+	}
+	return false
+}
+
+// QuotaExceeded 判断密钥额度是否已用尽；QuotaLimit 为 0 表示不限制。
+func (k *KeyIdentity) QuotaExceeded() bool {
+	return k.QuotaLimit > 0 && k.UsedPoints >= k.QuotaLimit
 }
 
 // CreateKeyInput 创建密钥的入参。
@@ -78,6 +140,16 @@ type CreateKeyInput struct {
 	QPM int `json:"qpm"`
 	// Concurrency 并发上限，<=0 表示继承全局默认。
 	Concurrency int `json:"concurrency"`
+	// GroupTag 分组标签（选填）。
+	GroupTag string `json:"group_tag"`
+	// CustomKey 自定义密钥后缀（选填）：完整密钥 = 前缀 + 自定义后缀，需全局唯一。
+	CustomKey string `json:"custom_key"`
+	// IPWhitelist IP 白名单（IP 或 CIDR），空=不限制。
+	IPWhitelist []string `json:"ip_whitelist"`
+	// QuotaLimit 密钥级额度上限（点），0=不限。
+	QuotaLimit int64 `json:"quota_limit"`
+	// AllowedModels 模型白名单，空=不限制。
+	AllowedModels []string `json:"allowed_models"`
 }
 
 // CreateAPIKey 生成密钥，明文仅在此处返回一次。
@@ -90,9 +162,26 @@ func (c *Container) CreateAPIKey(ctx context.Context, userID uint, in CreateKeyI
 		return nil, "", apierr.New(apierr.ErrInvalidParam, "名称长度不能超过 64 字符")
 	}
 
-	plain, err := crypto.GenerateAPIKey(c.Config.Security.APIKeyPrefix, c.Config.Security.APIKeyRandomBytes)
+	plain, err := c.newAPIKeyPlain(in.CustomKey)
 	if err != nil {
-		return nil, "", apierr.Wrap(apierr.ErrCrypto, err)
+		return nil, "", err
+	}
+
+	// 白名单校验：IP 需为合法 IP/CIDR
+	for _, item := range in.IPWhitelist {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			if _, _, err := net.ParseCIDR(item); err != nil {
+				return nil, "", apierr.New(apierr.ErrInvalidParam, "IP 白名单格式错误: "+item)
+			}
+			continue
+		}
+		if net.ParseIP(item) == nil {
+			return nil, "", apierr.New(apierr.ErrInvalidParam, "IP 白名单格式错误: "+item)
+		}
 	}
 
 	key := &model.APIKey{
@@ -104,6 +193,14 @@ func (c *Container) CreateAPIKey(ctx context.Context, userID uint, in CreateKeyI
 		Status:      constant.StatusEnabled,
 		QPM:         in.QPM,
 		Concurrency: in.Concurrency,
+		GroupTag:    strings.TrimSpace(in.GroupTag),
+		QuotaLimit:  in.QuotaLimit,
+	}
+	if err := setJSONList(&key.IPWhitelist, in.IPWhitelist); err != nil {
+		return nil, "", apierr.Wrap(apierr.ErrInvalidParam, err)
+	}
+	if err := setJSONList(&key.AllowedModels, in.AllowedModels); err != nil {
+		return nil, "", apierr.Wrap(apierr.ErrInvalidParam, err)
 	}
 	if in.ExpiresInDays > 0 {
 		exp := time.Now().AddDate(0, 0, in.ExpiresInDays)
@@ -122,8 +219,39 @@ func (c *Container) CreateAPIKey(ctx context.Context, userID uint, in CreateKeyI
 }
 
 // ListAPIKeys 分页查询用户的密钥。userID 为 0 时查询全部（管理端）。
-// UpdateAPIKeyUsage 转发结算时累加密钥使用统计。
-func (c *Container) UpdateAPIKeyUsage(ctx context.Context, keyID uint, tokens int) {
+// newAPIKeyPlain 生成密钥明文：提供了自定义后缀则拼接前缀使用，否则随机生成。
+func (c *Container) newAPIKeyPlain(custom string) (string, error) {
+	custom = strings.TrimSpace(custom)
+	if custom == "" {
+		return crypto.GenerateAPIKey(c.Config.Security.APIKeyPrefix, c.Config.Security.APIKeyRandomBytes)
+	}
+	if !customKeyPattern.MatchString(custom) {
+		return "", apierr.New(apierr.ErrInvalidParam, "自定义密钥仅支持字母、数字、下划线与中划线，长度 8-64")
+	}
+	plain := c.Config.Security.APIKeyPrefix + custom
+	return plain, nil
+}
+
+var customKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+
+// setJSONList 序列化字符串列表到 JSON 文本字段；nil/空列表存 "[]"。
+func setJSONList(dst *string, list []string) error {
+	clean := make([]string, 0, len(list))
+	for _, item := range list {
+		if item = strings.TrimSpace(item); item != "" {
+			clean = append(clean, item)
+		}
+	}
+	data, err := json.Marshal(clean)
+	if err != nil {
+		return err
+	}
+	*dst = string(data)
+	return nil
+}
+
+// UpdateAPIKeyUsage 转发结算时累加密钥使用统计与消耗点数。
+func (c *Container) UpdateAPIKeyUsage(ctx context.Context, keyID uint, tokens int, points int64) {
 	if keyID == 0 {
 		return
 	}
@@ -131,10 +259,13 @@ func (c *Container) UpdateAPIKeyUsage(ctx context.Context, keyID uint, tokens in
 		Updates(map[string]interface{}{
 			"request_count": gorm.Expr("request_count + 1"),
 			"total_tokens":  gorm.Expr("total_tokens + ?", tokens),
+			"used_points":   gorm.Expr("used_points + ?", points),
 		}).Error
 	if err != nil && c.Logger != nil {
 		c.Logger.Warn("更新密钥使用统计失败", zap.Uint("key_id", keyID), zap.Error(err))
 	}
+	// 刷新密钥缓存中的消耗快照，让额度限制尽快生效
+	c.RefreshKeyUsage(keyID, tokens, points)
 }
 
 func (c *Container) ListAPIKeys(ctx context.Context, userID uint, page, pageSize int) ([]model.APIKey, int64, error) {
@@ -227,15 +358,20 @@ func (c *Container) ResolveAPIKey(ctx context.Context, plain string) (*KeyIdenti
 }
 
 type keyRow struct {
-	ID          uint
-	UserID      uint
-	Status      int
-	QPM         int
-	Concurrency int
-	ExpiresAt   *time.Time
-	RevokedAt   *time.Time
-	UserStatus  int
-	UserRole    string
+	ID            uint
+	UserID        uint
+	Status        int
+	QPM           int
+	Concurrency   int
+	ExpiresAt     *time.Time
+	RevokedAt     *time.Time
+	UserStatus    int
+	UserRole      string
+	GroupTag      string
+	IPWhitelist   string
+	QuotaLimit    int64
+	UsedPoints    int64
+	AllowedModels string
 }
 
 func (c *Container) loadKeyIdentity(ctx context.Context, hash string) (*KeyIdentity, error) {
@@ -243,7 +379,9 @@ func (c *Container) loadKeyIdentity(ctx context.Context, hash string) (*KeyIdent
 	err := c.DB.WithContext(ctx).
 		Table("api_keys").
 		Select("api_keys.id, api_keys.user_id, api_keys.status, api_keys.qpm, api_keys.concurrency, "+
-			"api_keys.expires_at, api_keys.revoked_at, users.status AS user_status, users.role AS user_role").
+			"api_keys.expires_at, api_keys.revoked_at, api_keys.group_tag, api_keys.ip_whitelist, "+
+			"api_keys.quota_limit, api_keys.used_points, api_keys.allowed_models, "+
+			"users.status AS user_status, users.role AS user_role").
 		Joins("LEFT JOIN users ON users.id = api_keys.user_id").
 		Where("api_keys.key_hash = ? AND api_keys.deleted_at IS NULL", hash).
 		Scan(&row).Error
@@ -260,10 +398,15 @@ func (c *Container) loadKeyIdentity(ctx context.Context, hash string) (*KeyIdent
 		QPM:         row.QPM,
 		Concurrency: row.Concurrency,
 		Revoked:     row.RevokedAt != nil,
+		GroupTag:    row.GroupTag,
+		QuotaLimit:  row.QuotaLimit,
+		UsedPoints:  row.UsedPoints,
 	}
 	if row.ExpiresAt != nil {
 		idn.ExpiresAtUnix = row.ExpiresAt.Unix()
 	}
+	_ = json.Unmarshal([]byte(row.IPWhitelist), &idn.IPWhitelist)
+	_ = json.Unmarshal([]byte(row.AllowedModels), &idn.AllowedModels)
 	return idn, nil
 }
 
@@ -294,11 +437,48 @@ func (c *Container) warmKeyCache(ctx context.Context, key *model.APIKey) {
 		QPM:         key.QPM,
 		Concurrency: key.Concurrency,
 		Revoked:     key.RevokedAt != nil,
+		GroupTag:    key.GroupTag,
+		QuotaLimit:  key.QuotaLimit,
+		UsedPoints:  key.UsedPoints,
 	}
 	if key.ExpiresAt != nil {
 		idn.ExpiresAtUnix = key.ExpiresAt.Unix()
 	}
+	_ = json.Unmarshal([]byte(key.IPWhitelist), &idn.IPWhitelist)
+	_ = json.Unmarshal([]byte(key.AllowedModels), &idn.AllowedModels)
 	c.warmIdentityCache(ctx, key.KeyHash, idn)
+}
+
+// RefreshKeyUsage 结算后同步缓存中的消耗快照，让密钥额度限制尽快生效。
+func (c *Container) RefreshKeyUsage(keyID uint, tokens int, points int64) {
+	if keyID == 0 || (points == 0 && tokens == 0) {
+		return
+	}
+	ctx := context.Background()
+	var hash string
+	if err := c.DB.WithContext(ctx).Model(&model.APIKey{}).
+		Where("id = ?", keyID).Pluck("key_hash", &hash).Error; err != nil || hash == "" {
+		return
+	}
+
+	if c.KeyCache != nil {
+		if v, ok := c.KeyCache.Get(hash); ok {
+			if idn, ok := v.(*KeyIdentity); ok && idn != nil {
+				idn.UsedPoints += points
+			}
+		}
+	}
+	if c.RDB != nil {
+		if raw, err := c.RDB.Get(ctx, c.apiKeyCacheKey(hash)).Bytes(); err == nil {
+			var idn KeyIdentity
+			if json.Unmarshal(raw, &idn) == nil {
+				idn.UsedPoints += points
+				if data, err := json.Marshal(&idn); err == nil {
+					_ = c.RDB.Set(ctx, c.apiKeyCacheKey(hash), data, c.keyCacheTTL(&idn)).Err()
+				}
+			}
+		}
+	}
 }
 
 // dropKeyCacheByID 按主键清除缓存。

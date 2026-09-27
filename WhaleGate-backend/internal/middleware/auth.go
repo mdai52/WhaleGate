@@ -99,6 +99,11 @@ func APIKeyAuth(svc *service.Container) gin.HandlerFunc {
 			response.AbortCode(c, eno, "")
 			return
 		}
+		// 密钥 IP 白名单：启用后仅允许名单内的来源调用
+		if !idn.IPAllowed(c.ClientIP()) {
+			response.AbortCode(c, apierr.ErrForbidden, "来源 IP 不在该 API Key 的白名单内")
+			return
+		}
 
 		c.Set(constant.CtxAPIKeyID, idn.KeyID)
 		c.Set(constant.CtxAPIKey, idn)

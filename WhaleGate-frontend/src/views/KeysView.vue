@@ -3,8 +3,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { CopyOutlined, DeleteOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { apiKeyApi } from '@/api/apikey'
+import { channelApi } from '@/api/channel'
 import { useUserStore } from '@/stores/user'
-import type { APIKeyItem } from '@/api/types'
+import type { APIKeyItem, CreateKeyPayload } from '@/api/types'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -14,7 +15,73 @@ const pagination = reactive({ current: 1, pageSize: 20, total: 0 })
 const createOpen = ref(false)
 const creating = ref(false)
 const newKey = ref('')
-const form = reactive({ name: '', expires_in_days: undefined as number | undefined })
+const form = reactive({
+  name: '',
+  group_tag: '',
+  // 各项可选配置：开关式，默认关闭，避免界面过载
+  customEnabled: false,
+  custom_key: '',
+  ipEnabled: false,
+  ip_whitelist: '',
+  modelsEnabled: false,
+  allowed_models: [] as string[],
+  quotaEnabled: false,
+  quota_limit: 0,
+  rateEnabled: false,
+  qpm: 0,
+  concurrency: 0,
+  expiryEnabled: false,
+  expires_in_days: 30,
+})
+
+/** 模型白名单候选：全局模型目录 */
+const modelOptions = ref<string[]>([])
+const catalogLoading = ref(false)
+
+async function loadCatalog() {
+  if (modelOptions.value.length) {
+    return
+  }
+  catalogLoading.value = true
+  try {
+    const res = await channelApi.catalog({ page_size: 500 })
+    modelOptions.value = res.items.map((i) => i.model_id)
+  } catch {
+    modelOptions.value = []
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+function buildPayload() {
+  const payload: CreateKeyPayload = { name: form.name.trim() || '默认密钥' }
+  if (form.group_tag.trim()) {
+    payload.group_tag = form.group_tag.trim()
+  }
+  if (form.customEnabled && form.custom_key.trim()) {
+    payload.custom_key = form.custom_key.trim()
+  }
+  if (form.ipEnabled && form.ip_whitelist.trim()) {
+    payload.ip_whitelist = form.ip_whitelist
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (form.modelsEnabled && form.allowed_models.length) {
+    payload.allowed_models = form.allowed_models
+  }
+  if (form.quotaEnabled && form.quota_limit > 0) {
+    payload.quota_limit = form.quota_limit
+  }
+  if (form.rateEnabled) {
+    if (form.qpm > 0) payload.qpm = form.qpm
+    if (form.concurrency > 0) payload.concurrency = form.concurrency
+  }
+  if (form.expiryEnabled && form.expires_in_days > 0) {
+    payload.expires_in_days = form.expires_in_days
+  }
+  return payload
+}
 
 const columns = [
   { title: '名称', dataIndex: 'name', key: 'name' },
@@ -51,18 +118,35 @@ async function load() {
 
 function openCreate() {
   newKey.value = ''
-  form.name = ''
-  form.expires_in_days = undefined
+  Object.assign(form, {
+    name: '',
+    group_tag: '',
+    customEnabled: false,
+    custom_key: '',
+    ipEnabled: false,
+    ip_whitelist: '',
+    modelsEnabled: false,
+    allowed_models: [],
+    quotaEnabled: false,
+    quota_limit: 0,
+    rateEnabled: false,
+    qpm: 0,
+    concurrency: 0,
+    expiryEnabled: false,
+    expires_in_days: 30,
+  })
   createOpen.value = true
+  void loadCatalog()
 }
 
 async function submitCreate() {
+  if (form.customEnabled && form.custom_key.trim() && !/^[A-Za-z0-9_-]{8,64}$/.test(form.custom_key.trim())) {
+    message.error('自定义密钥仅支持字母、数字、下划线与中划线，长度 8-64')
+    return
+  }
   creating.value = true
   try {
-    const res = await apiKeyApi.create({
-      name: form.name || '默认密钥',
-      expires_in_days: form.expires_in_days,
-    })
+    const res = await apiKeyApi.create(buildPayload())
     newKey.value = res.key
     await load()
   } finally {
@@ -227,13 +311,108 @@ onMounted(load)
     <a-modal v-model:open="createOpen" title="新建密钥" :footer="null" :width="480">
       <template v-if="!newKey">
         <a-form layout="vertical" @finish="submitCreate">
-          <a-form-item label="名称">
+          <a-form-item label="名称" required>
             <a-input v-model:value="form.name" placeholder="例如：生产环境-后端服务" allow-clear />
           </a-form-item>
-          <a-form-item label="有效天数">
-            <a-input-number v-model:value="form.expires_in_days" :min="1" :max="3650" style="width: 100%" placeholder="留空表示永不过期" />
+
+          <a-form-item label="分组">
+            <a-input v-model:value="form.group_tag" placeholder="选填，例如：生产 / 测试，便于分类管理" allow-clear />
           </a-form-item>
-          <a-button type="primary" html-type="submit" block :loading="creating">生成密钥</a-button>
+
+          <div class="wg-opt">
+            <div class="wg-opt-head">
+              <span>自定义密钥</span>
+              <a-switch v-model:checked="form.customEnabled" size="small" />
+            </div>
+            <a-input
+              v-if="form.customEnabled"
+              v-model:value="form.custom_key"
+              addon-before="sk-"
+              placeholder="自定义后缀，8-64 位字母数字-_，需全局唯一"
+              allow-clear
+            />
+          </div>
+
+          <div class="wg-opt">
+            <div class="wg-opt-head">
+              <span>IP 限制</span>
+              <a-switch v-model:checked="form.ipEnabled" size="small" />
+            </div>
+            <a-textarea
+              v-if="form.ipEnabled"
+              v-model:value="form.ip_whitelist"
+              :rows="3"
+              placeholder="每行一个，支持单个 IP（10.0.0.1）或网段（10.0.0.0/8）；留空行自动忽略"
+            />
+          </div>
+
+          <div class="wg-opt">
+            <div class="wg-opt-head">
+              <span>模型白名单</span>
+              <a-switch v-model:checked="form.modelsEnabled" size="small" />
+            </div>
+            <a-select
+              v-if="form.modelsEnabled"
+              v-model:value="form.allowed_models"
+              mode="tags"
+              show-search
+              :options="modelOptions.map((m) => ({ value: m }))"
+              :loading="catalogLoading"
+              placeholder="选择或输入该密钥可调用的模型；留空 = 不限制"
+              style="width: 100%"
+            />
+          </div>
+
+          <div class="wg-opt">
+            <div class="wg-opt-head">
+              <span>额度限制</span>
+              <a-switch v-model:checked="form.quotaEnabled" size="small" />
+            </div>
+            <template v-if="form.quotaEnabled">
+              <a-input-number
+                v-model:value="form.quota_limit"
+                :min="0"
+                style="width: 100%"
+                addon-before="点数"
+                placeholder="0 = 不限制"
+              />
+              <div class="wg-muted" style="font-size: 12px; margin-top: 4px">
+                该密钥可消耗的最大点数（1 元 = 1000 点），0 = 不限制。
+              </div>
+            </template>
+          </div>
+
+          <div class="wg-opt">
+            <div class="wg-opt-head">
+              <span>速率限制</span>
+              <a-switch v-model:checked="form.rateEnabled" size="small" />
+            </div>
+            <a-row v-if="form.rateEnabled" :gutter="12">
+              <a-col :span="12">
+                <a-input-number v-model:value="form.qpm" :min="0" style="width: 100%" addon-before="QPM" placeholder="0 = 默认" />
+              </a-col>
+              <a-col :span="12">
+                <a-input-number v-model:value="form.concurrency" :min="0" style="width: 100%" addon-before="并发" placeholder="0 = 默认" />
+              </a-col>
+            </a-row>
+          </div>
+
+          <div class="wg-opt">
+            <div class="wg-opt-head">
+              <span>密钥有效期</span>
+              <a-switch v-model:checked="form.expiryEnabled" size="small" />
+            </div>
+            <a-input-number
+              v-if="form.expiryEnabled"
+              v-model:value="form.expires_in_days"
+              :min="1"
+              :max="3650"
+              style="width: 100%"
+              addon-before="天"
+            />
+          </div>
+
+          <a-button type="primary" html-type="submit" block :loading="creating">创建密钥</a-button>
         </a-form>
       </template>
       <template v-else>
@@ -260,5 +439,17 @@ onMounted(load)
   font-size: 12px;
   color: rgba(0, 0, 0, 0.45);
   margin-top: 4px;
+}
+
+.wg-opt {
+  margin-bottom: 16px;
+}
+
+.wg-opt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 500;
 }
 </style>

@@ -153,6 +153,20 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 	// Skills 与 MCP 注入：解析后只做一次，重试不会重复注入。
 	autoExecute, maxRounds := h.applyEnhancements(c, req)
 
+	// 密钥级策略：模型白名单与额度限制
+	if idn := currentKeyIdentity(c); idn != nil {
+		if !idn.ModelAllowed(req.Model) {
+			writeRelayError(c, clientProtocol,
+				apierr.New(apierr.ErrForbidden, "该 API Key 无权调用模型 "+req.Model))
+			return
+		}
+		if idn.QuotaExceeded() {
+			writeRelayError(c, clientProtocol,
+				apierr.New(apierr.ErrQuotaExceeded, "该 API Key 的额度已用尽"))
+			return
+		}
+	}
+
 	start := time.Now()
 	attempts := 1 + h.svc.Config.Gateway.MaxRetries
 	exclude := make(map[uint]struct{}, attempts)
@@ -244,7 +258,7 @@ func (h *RelayHandler) settleAndLog(
 
 	// 密钥使用统计（成功才计入）
 	if status == model.CallStatusSuccess {
-		h.svc.UpdateAPIKeyUsage(c.Request.Context(), currentAPIKeyID(c), usage.TotalTokens)
+		h.svc.UpdateAPIKeyUsage(c.Request.Context(), currentAPIKeyID(c), usage.TotalTokens, points)
 	}
 
 	entry := &model.CallLog{
@@ -320,6 +334,16 @@ func currentAPIKeyID(c *gin.Context) uint {
 	default:
 		return 0
 	}
+}
+
+// currentKeyIdentity 读取鉴权中间件注入的密钥身份（含白名单与额度配置）。
+func currentKeyIdentity(c *gin.Context) *service.KeyIdentity {
+	v, ok := c.Get(constant.CtxAPIKey)
+	if !ok {
+		return nil
+	}
+	idn, _ := v.(*service.KeyIdentity)
+	return idn
 }
 
 // relayOutcome 一次转发的结果摘要。

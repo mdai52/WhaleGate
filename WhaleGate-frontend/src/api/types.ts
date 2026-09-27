@@ -142,6 +142,11 @@ export interface APIKeyItem {
   last_used_at?: string | null
   request_count: number
   total_tokens: number
+  group_tag?: string
+  ip_whitelist?: string
+  quota_limit?: number
+  used_points?: number
+  allowed_models?: string
   created_at: string
 }
 
@@ -150,6 +155,16 @@ export interface CreateKeyPayload {
   expires_in_days?: number
   qpm?: number
   concurrency?: number
+  /** 分组标签（选填） */
+  group_tag?: string
+  /** 自定义密钥后缀（选填），完整密钥 = sk- + 后缀 */
+  custom_key?: string
+  /** IP 白名单（IP 或 CIDR），空=不限制 */
+  ip_whitelist?: string[]
+  /** 密钥级额度上限（点），0=不限 */
+  quota_limit?: number
+  /** 模型白名单，空=不限制 */
+  allowed_models?: string[]
 }
 
 export interface CreateKeyResult extends APIKeyItem {
