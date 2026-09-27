@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -113,10 +114,10 @@ func TestParseCredentialFileInvalid(t *testing.T) {
 
 func TestSessionsUnknownState(t *testing.T) {
 	s := NewSessions(nil)
-	if _, err := s.CompleteAuthorization(t.Context(), "nope", "code"); !errors.Is(err, ErrUnknownState) {
+	if _, err := s.CompleteAuthorization(context.Background(), "nope", "code"); !errors.Is(err, ErrUnknownState) {
 		t.Fatalf("未知 state 应返回 ErrUnknownState，实际 %v", err)
 	}
-	if _, err := s.PollDevice(t.Context(), "nope"); !errors.Is(err, ErrUnknownState) {
+	if _, err := s.PollDevice(context.Background(), "nope"); !errors.Is(err, ErrUnknownState) {
 		t.Fatalf("未知 state 应返回 ErrUnknownState，实际 %v", err)
 	}
 }
