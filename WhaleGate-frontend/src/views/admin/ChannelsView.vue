@@ -4,7 +4,10 @@ import { DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/i
 import { message, Modal } from 'ant-design-vue'
 import { channelApi } from '@/api/channel'
 import { useIsMobile } from '@/composables/useIsMobile'
-import { parseJSON, stringifyJSON } from '@/utils/json'
+import { parseJSON } from '@/utils/json'
+import AliasEditor from '@/components/AliasEditor.vue'
+import KeyValueEditor from '@/components/KeyValueEditor.vue'
+import ParamSchemaEditor from '@/components/ParamSchemaEditor.vue'
 import type {
   Channel,
   ChannelInput,
@@ -135,13 +138,29 @@ function clearModels() {
   form.models = []
 }
 
-// 高级配置以 JSON 文本编辑
+// 高级配置：可视化编辑（无需手写 JSON）
 const advanced = reactive({
-  model_mapping: '',
-  model_alias: '',
-  request_override: '',
-  param_schema: '',
+  mapping: {} as Record<string, string>,
+  aliases: {} as Record<string, { model?: string; override?: Record<string, unknown> }>,
+  override: {} as Record<string, string>,
+  schema: {} as { supported?: string[]; exclude?: string[]; defaults?: Record<string, unknown> },
 })
+
+/** 别名可引用的上游模型：登记模型 + 探测发现的模型 */
+const aliasModelOptions = computed(() => {
+  const set = new Set<string>(form.models ?? [])
+  for (const m of detectedModels.value) {
+    set.add(m.id)
+  }
+  return Array.from(set)
+})
+
+function resetAdvanced() {
+  advanced.mapping = {}
+  advanced.aliases = {}
+  advanced.override = {}
+  advanced.schema = {}
+}
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
@@ -193,12 +212,7 @@ function openCreate() {
     timeout_seconds: 0,
     max_retries: 0,
   })
-  Object.assign(advanced, {
-    model_mapping: '',
-    model_alias: '',
-    request_override: '',
-    param_schema: '',
-  })
+  resetAdvanced()
   detectResult.value = null
   detectedModels.value = []
   modelKeyword.value = ''
@@ -221,10 +235,13 @@ function openEdit(row: Channel) {
     max_retries: row.max_retries,
   })
   Object.assign(advanced, {
-    model_mapping: stringifyJSON(parseJSON(row.model_mapping, {}).value),
-    model_alias: stringifyJSON(parseJSON(row.model_alias, {}).value),
-    request_override: stringifyJSON(parseJSON(row.request_override, {}).value),
-    param_schema: stringifyJSON(parseJSON(row.param_schema, {}).value),
+    mapping: parseJSON<Record<string, string>>(row.model_mapping, {}).value,
+    aliases: parseJSON<Record<string, { model?: string; override?: Record<string, unknown> }>>(row.model_alias, {}).value,
+    override: parseJSON<Record<string, string>>(row.request_override, {}).value,
+    schema: parseJSON<{ supported?: string[]; exclude?: string[]; defaults?: Record<string, unknown> }>(
+      row.param_schema,
+      {},
+    ).value,
   })
   drawerOpen.value = true
 }
@@ -254,32 +271,44 @@ function buildPayload(): ChannelInput | null {
     payload.max_output = detectResult.value.max_output
   }
 
-  const mapping = parseJSON<Record<string, string>>(advanced.model_mapping, {})
-  if (!mapping.ok) {
-    message.error('模型映射 JSON 格式错误：' + mapping.error)
-    return null
+  // 高级配置：可视化编辑器输出的结构化对象直接序列化，无需用户写 JSON
+  if (Object.keys(advanced.mapping).length) {
+    payload.model_mapping = advanced.mapping
   }
-  const alias = parseJSON<Record<string, unknown>>(advanced.model_alias, {})
-  if (!alias.ok) {
-    message.error('模型别名 JSON 格式错误：' + alias.error)
-    return null
+  if (Object.keys(advanced.aliases).length) {
+    payload.model_alias = advanced.aliases as ChannelInput['model_alias']
   }
-  const override = parseJSON<Record<string, unknown>>(advanced.request_override, {})
-  if (!override.ok) {
-    message.error('参数注入 JSON 格式错误：' + override.error)
-    return null
+  if (Object.keys(advanced.override).length) {
+    payload.request_override = parseValueRecord(advanced.override)
   }
-  const schema = parseJSON<Record<string, unknown>>(advanced.param_schema, {})
-  if (!schema.ok) {
-    message.error('参数能力 JSON 格式错误：' + schema.error)
-    return null
+  if (Object.keys(advanced.schema).length) {
+    payload.param_schema = advanced.schema as ChannelInput['param_schema']
   }
-
-  if (Object.keys(mapping.value).length) payload.model_mapping = mapping.value
-  if (Object.keys(alias.value).length) payload.model_alias = alias.value as ChannelInput['model_alias']
-  if (Object.keys(override.value).length) payload.request_override = override.value
-  if (Object.keys(schema.value).length) payload.param_schema = schema.value as ChannelInput['param_schema']
   return payload
+}
+
+/** 把 KV 编辑器中的字符串值解析为数字 / 布尔 / JSON */
+function parseValueRecord(record: Record<string, string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, raw] of Object.entries(record)) {
+    const t = raw.trim()
+    if (t === 'true') {
+      out[key] = true
+    } else if (t === 'false') {
+      out[key] = false
+    } else if (t !== '' && !Number.isNaN(Number(t))) {
+      out[key] = Number(t)
+    } else if (t.startsWith('{') || t.startsWith('[')) {
+      try {
+        out[key] = JSON.parse(t)
+      } catch {
+        out[key] = raw
+      }
+    } else {
+      out[key] = raw
+    }
+  }
+  return out
 }
 
 async function submit() {
@@ -565,28 +594,46 @@ load()
           </a-select>
         </a-form-item>
 
-        <a-divider orientation="left">高级配置（JSON）</a-divider>
+        <a-divider orientation="left">高级配置</a-divider>
 
-        <a-form-item label="模型名映射" extra="对外模型名 -> 上游模型名，例：{&quot;gpt-4o&quot;:&quot;gpt-4o-2024&quot;}">
-          <a-textarea v-model:value="advanced.model_mapping" :rows="2" placeholder="{}" />
+        <a-form-item>
+          <template #label>
+            模型名映射
+            <span class="wg-muted">（对外名 → 上游真实名，用户请求对外名时自动改写）</span>
+          </template>
+          <KeyValueEditor
+            v-model="advanced.mapping"
+            key-placeholder="对外模型名，如 gpt-4o"
+            value-placeholder="上游模型名，如 gpt-4o-2024"
+          />
         </a-form-item>
 
-        <a-form-item
-          label="模型别名"
-          extra="把一个上游模型 fork 成多个对外模型名，各自可带 override，例：{&quot;img-2k&quot;:{&quot;model&quot;:&quot;gpt-4o&quot;,&quot;override&quot;:{}}}"
-        >
-          <a-textarea v-model:value="advanced.model_alias" :rows="3" placeholder="{}" />
+        <a-form-item>
+          <template #label>
+            模型别名
+            <span class="wg-muted">（把一个上游模型 fork 成多个对外模型名，可各自注入参数，如把文本模型包装成不同分辨率的生图模型）</span>
+          </template>
+          <AliasEditor v-model="advanced.aliases" :model-options="aliasModelOptions" />
         </a-form-item>
 
-        <a-form-item label="请求参数注入" extra="强制合并到上游请求体（override-raw）">
-          <a-textarea v-model:value="advanced.request_override" :rows="2" placeholder="{}" />
+        <a-form-item>
+          <template #label>
+            请求参数注入
+            <span class="wg-muted">（强制合并到发往上游的请求体，对所有经过该渠道的请求生效）</span>
+          </template>
+          <KeyValueEditor
+            v-model="advanced.override"
+            key-placeholder="请求字段名，如 temperature"
+            value-placeholder="值，支持数字 / 布尔 / JSON"
+          />
         </a-form-item>
 
-        <a-form-item
-          label="参数能力声明"
-          extra="声明上游支持的统一参数名，未声明则用协议默认集；可用 exclude 排除"
-        >
-          <a-textarea v-model:value="advanced.param_schema" :rows="3" placeholder='{"supported":["temperature","top_k"]}' />
+        <a-form-item>
+          <template #label>
+            参数能力声明
+            <span class="wg-muted">（声明上游支持的统一参数；不声明则按协议默认集，用户传不支持的参数会被自动丢弃）</span>
+          </template>
+          <ParamSchemaEditor v-model="advanced.schema" />
         </a-form-item>
       </a-form>
 
