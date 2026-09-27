@@ -200,12 +200,29 @@ onMounted(async () => {
 
 <style scoped>
 .wg-login {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
   background: linear-gradient(135deg, var(--wg-primary-soft) 0%, #f5f7fa 100%);
+  background-image: url('/login-bg.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* 遮罩保证卡片与文字在背景图上仍然清晰可读 */
+.wg-login::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(2, 59, 130, 0.45) 0%, rgba(245, 247, 250, 0.65) 100%);
+}
+
+.wg-login > * {
+  position: relative;
 }
 
 .wg-login-card {

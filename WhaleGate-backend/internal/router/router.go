@@ -54,12 +54,15 @@ func NewEngine(d Deps) *gin.Engine {
 }
 
 func registerSystem(e *gin.Engine, d Deps) {
-	sys := handler.NewSystemHandler(d.DB, d.RDB, d.Logger, d.Version)
+	sys := handler.NewSystemHandler(d.DB, d.RDB, d.Logger, d.Version, d.Svc)
 	e.GET("/healthz", sys.Health)
 	e.GET("/readyz", sys.Ready)
 
 	v1 := e.Group("/api/v1")
 	v1.GET("/system/info", sys.Info)
+	// 公开：首次安装向导依赖这两个接口
+	v1.GET("/system/status", sys.Status)
+	v1.POST("/system/install", sys.Install)
 }
 
 func registerAPI(e *gin.Engine, d Deps) {

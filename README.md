@@ -60,19 +60,142 @@ make run                  # 启动服务端（默认 :8080）
 | 页面 | 说明 |
 | --- | --- |
 | 概览 | 余额 / 累计消耗 / 近 N 天请求与 Token 卡片，用量趋势图表（ECharts），快速接入示例 |
-| 密钥管理 | 创建（明文只展示一次）、列表、吊销、删除，支持有效期 |
+| 接入指南 | 网关地址、鉴权方式、Python / Node / cURL / Gemini 原生可复制示例、常见问题 |
+| 密钥管理 | 创建（明文只展示一次）、列表、吊销、删除；展示创建时间、最近使用、累计请求与累计 Token |
 | 调用历史 | 按模型 / 状态 / 时间范围筛选，展示 token、点数、耗时、首字延迟、计费置信度 |
+| 账号与安全 | 密码修改、Passkey / WebAuthn、GitHub 绑定 |
 
 **管理后台**（仅管理员可见）
 
 | 页面 | 说明 |
 | --- | --- |
 | 用户管理 | 创建用户、启停账号、按元调整额度（1 元 = 1000 点） |
-| 渠道管理 | 增删改查、连通性测试；配置模型列表、模型名映射、模型别名 fork、参数注入、参数能力声明 |
+| 渠道管理 | 增删改查、连通性测试、**自动探测模型**（只填地址与密钥即可识别协议与模型）；支持模型名映射、模型别名 fork、参数注入、参数能力声明 |
 | 倍率配置 | 模型倍率表（点 / 1K tokens）增删改查，`*` 为兜底 |
 | 全局日志 | 按用户 / 模型 / 状态 / 时间范围检索，含参数应用与丢弃明细 |
+| MCP 服务 | MCP Server 配置（stdio / HTTP）、工具发现与路由、代执行开关、调试调用 |
+| 技能管理 | SKILL.md 目录扫描与导入、启停、全文注入 / 仅索引两种模式 |
+| 认证文件 | OAuth 凭证导入、搜索筛选、重命名、导出下载、配额展示 |
+| 系统设置 | 自用模式（开启后免计费）、技能与 MCP 开关、最大工具轮次、管理员修改自身密码 |
+
+## 部署
+
+### 方式一：Docker Compose（推荐）
+
+```bash
+git clone https://cnb.cool/JingYu588/open/WhaleGate.git
+cd WhaleGate
+
+# 1. 准备配置文件
+cp WhaleGate-backend/configs/config.example.yaml WhaleGate-backend/configs/config.yaml
+
+# 2. 按需修改关键配置（数据库、Redis、加密密钥、JWT 密钥）
+vim WhaleGate-backend/configs/config.yaml
+
+# 3. 启动全部服务（Postgres / Redis / 网关）
+docker compose up -d
+
+# 4. 查看初始化管理员密码，或直接打开安装向导
+docker compose logs app | grep -i password
+```
+
+浏览器访问 `http://<服务器IP>:8080`：
+
+- 若系统尚未初始化（用户表为空），会自动进入**安装向导**，填写管理员账号密码即可完成初始化并自动登录
+- 若容器日志已生成随机密码，则用 `admin` 登录后按提示立即改密
+
+常用运维命令：
+
+```bash
+docker compose logs -f app        # 跟踪日志
+docker compose restart app        # 重启网关
+docker compose down               # 停止（保留数据卷）
+docker compose pull && docker compose up -d   # 升级镜像
+```
+
+### 方式二：Docker 单容器
+
+适合已有外部 Postgres / Redis 的场景：
+
+```bash
+docker run -d --name whalegate \
+  -p 8080:8080 \
+  -e WG_DATABASE_HOST=your-pg-host \
+  -e WG_DATABASE_PASSWORD=your-pg-password \
+  -e WG_REDIS_HOST=your-redis-host \
+  -e WG_SECRET_ENCRYPTION_KEY=<32字节随机字符串> \
+  -e WG_JWT_SECRET=<随机字符串> \
+  -v $(pwd)/WhaleGate-backend/configs:/app/configs \
+  docker.cnb.cool/jingyu588/open/whalegate/whalegate:latest
+```
+
+### 方式三：源码构建（二进制部署）
+
+```bash
+# 构建前端
+cd WhaleGate-frontend && npm install && npm run build && cd ..
+
+# 构建后端（前端产物会被内嵌到静态资源目录）
+cd WhaleGate-backend && go build -o ../bin/whalegate ./cmd/whalegate && cd ..
+
+# 执行迁移并启动
+./bin/whalegate -c WhaleGate-backend/configs/config.yaml -migrate
+./bin/whalegate -c WhaleGate-backend/configs/config.yaml
+```
+
+`-migrate` 只执行数据库迁移后退出，适合在 CI / 发布流程中单独一步执行。
+
+### 反向代理（Nginx）
+
+流式响应必须关闭缓冲，否则 SSE 会被攒包：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # 流式关键配置
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 300s;
+    chunked_transfer_encoding on;
+}
+```
+
+### 升级与备份
+
+- **升级**：先备份数据库，再拉取新镜像重启，迁移会在启动时自动执行
+- **备份**：`docker compose exec postgres pg_dump -U whalegate whalegate > backup.sql`
+- **恢复**：`docker compose exec -T postgres psql -U whalegate whalegate < backup.sql`
+
+## 接入使用
+
+管理员完成初始化后：
+
+1. **渠道管理** → 填入上游 API 地址与密钥 → 点「自动探测模型」，自动识别协议类型、拉取模型列表与能力 → 勾选要开放的模型 → 保存
+2. **密钥管理** → 生成 `sk-` 开头的 API Key（明文只展示一次）
+3. **接入指南** → 复制对应语言的示例代码，替换 `base_url` 与 `api_key` 即可调用
+
+网关对外地址：
+
+| 协议 | 地址 |
+| --- | --- |
+| OpenAI 兼容 | `http://<host>:8080/v1/chat/completions` |
+| 模型列表 | `http://<host>:8080/v1/models` |
+| Gemini 原生 | `http://<host>:8080/v1beta/models/{model}:generateContent` |
 
 ## 首次安装与安全
+
+系统提供两种初始化方式：
+
+**方式一：Web 安装向导（推荐）**
+
+用户表为空时访问任意页面会自动跳转到 `/install`，填写管理员账号、密码即可完成初始化并自动登录，随后按引导添加渠道与密钥。
+
+**方式二：容器自动创建**
 
 容器首次启动（用户表为空）时自动创建管理员账号 `admin`，并生成 24 位随机强密码。
 
@@ -95,6 +218,18 @@ docker compose logs app | grep -i password
 - 普通注册永远不会获得管理员角色（管理员只由初始化流程创建），避免抢注提权
 
 相关配置：`security.bootstrap_admin`、`security.bootstrap_password_length`、`security.allow_registration`。
+
+相关接口：`GET /api/v1/system/status`（查询是否已初始化）、`POST /api/v1/system/install`（仅在未初始化时可用，避免被用于提权）。
+
+## 开源协议
+
+本项目基于 **MIT License** 开源，详见 [LICENSE](./LICENSE)。
+
+- 允许自由使用、复制、修改、合并、发布、分发、再许可与商业使用
+- 需保留版权声明与许可声明
+- 软件按「原样」提供，不含任何明示或暗示的担保
+
+项目中 `WhaleGate-frontend/public/logo.png`、`logo-mark.png` 等品牌素材同样遵循该许可。
 
 ## 用户中心：第三方绑定
 

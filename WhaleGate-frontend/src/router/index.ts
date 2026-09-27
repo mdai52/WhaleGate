@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { systemApi } from '@/api/system'
 import { useUserStore } from '@/stores/user'
 
 const routes: RouteRecordRaw[] = [
@@ -7,6 +8,12 @@ const routes: RouteRecordRaw[] = [
     name: 'login',
     component: () => import('@/views/LoginView.vue'),
     meta: { title: '登录', public: true },
+  },
+  {
+    path: '/install',
+    name: 'install',
+    component: () => import('@/views/InstallView.vue'),
+    meta: { title: '初始化安装', public: true },
   },
   {
     path: '/',
@@ -18,6 +25,12 @@ const routes: RouteRecordRaw[] = [
         name: 'dashboard',
         component: () => import('@/views/DashboardView.vue'),
         meta: { title: '概览', icon: 'DashboardOutlined' },
+      },
+      {
+        path: 'guide',
+        name: 'guide',
+        component: () => import('@/views/GuideView.vue'),
+        meta: { title: '接入指南', icon: 'BookOutlined' },
       },
       {
         path: 'keys',
@@ -101,8 +114,27 @@ const router = createRouter({
   routes,
 })
 
+// 系统是否已完成初始化；未初始化时所有页面跳转到安装向导
+let initialized: boolean | null = null
+
 router.beforeEach(async (to) => {
   document.title = to.meta.title ? `鲸闸 · ${to.meta.title}` : '鲸闸 WhaleGate'
+
+  if (to.name !== 'install') {
+    if (initialized === null) {
+      try {
+        const status = await systemApi.status()
+        initialized = status.initialized
+      } catch {
+        // 后端不可达时不阻塞导航，交由各页面自行报错
+        initialized = true
+      }
+    }
+    if (!initialized) {
+      return { name: 'install' }
+    }
+  }
+
   if (to.meta.public) {
     return true
   }
