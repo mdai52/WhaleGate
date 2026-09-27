@@ -3,6 +3,7 @@ import { reactive, ref } from 'vue'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { adminApi } from '@/api/admin'
+import { channelApi } from '@/api/channel'
 import { useIsMobile } from '@/composables/useIsMobile'
 import type { ModelRatio } from '@/api/types'
 
@@ -15,6 +16,21 @@ const pagination = reactive({ current: 1, pageSize: 20, total: 0 })
 const modalOpen = ref(false)
 const editingId = ref<number | null>(null)
 const form = reactive({ model: '', prompt_ratio: 15, completion_ratio: 60, enabled: true })
+
+/** 模型候选：全局模型目录（避免手填错字） */
+const modelOptions = ref<string[]>([])
+
+async function loadCatalog() {
+  if (modelOptions.value.length) {
+    return
+  }
+  try {
+    const res = await channelApi.catalog({ page_size: 500 })
+    modelOptions.value = res.items.map((i) => i.model_id)
+  } catch {
+    modelOptions.value = []
+  }
+}
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
@@ -40,6 +56,7 @@ function openCreate() {
   editingId.value = null
   Object.assign(form, { model: '', prompt_ratio: 15, completion_ratio: 60, enabled: true })
   modalOpen.value = true
+  void loadCatalog()
 }
 
 function openEdit(row: ModelRatio) {
@@ -151,7 +168,13 @@ load()
     <a-modal v-model:open="modalOpen" :title="editingId ? '编辑倍率' : '新增倍率'" :footer="null" :width="440">
       <a-form layout="vertical" @finish="submit">
         <a-form-item label="模型名">
-          <a-input v-model:value="form.model" placeholder="例如 gpt-4o，* 表示兜底" allow-clear />
+          <a-auto-complete
+            v-model:value="form.model"
+            :options="modelOptions.map((m) => ({ value: m }))"
+            placeholder="输入或选择模型名，* 表示兜底"
+            allow-clear
+            filter-option
+          />
         </a-form-item>
         <a-form-item label="输入倍率（点 / 1K tokens）">
           <a-input-number v-model:value="form.prompt_ratio" :min="0" :step="0.5" style="width: 100%" />

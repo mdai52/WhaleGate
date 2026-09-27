@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"encoding/csv"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -162,12 +164,7 @@ func (h *AdminHandler) DeleteRatio(c *gin.Context) {
 // ListLogs 查询全局调用日志。
 func (h *AdminHandler) ListLogs(c *gin.Context) {
 	p := ParsePage(c)
-	filter := service.CallLogFilter{
-		Model: c.Query("model"),
-		Start: parseTime(c, "start"),
-		End:   parseTime(c, "end"),
-		Page:  p.Page,
-	}
+	filter := buildCallLogFilter(c, p)
 	filter.PageSize = p.PageSize
 	if v, err := strconv.ParseUint(c.Query("user_id"), 10, 64); err == nil && v > 0 {
 		filter.UserID = uint(v)
@@ -185,6 +182,98 @@ func (h *AdminHandler) ListLogs(c *gin.Context) {
 		return
 	}
 	response.Page(c, list, total, p.Page, p.PageSize)
+}
+
+// ExportLogs 按当前筛选条件导出调用日志为 CSV（最多 10000 条）。
+func (h *AdminHandler) ExportLogs(c *gin.Context) {
+	p := ParsePage(c)
+	filter := buildCallLogFilter(c, p)
+	filter.Page = 1
+	filter.PageSize = maxExportRows
+
+	list, _, err := h.svc.ListCallLogs(c.Request.Context(), filter)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+
+	fileName := "call-logs-" + time.Now().Format("20060102-150405") + ".csv"
+	c.Header("Content-Disposition", `attachment; filename="`+fileName+`"`)
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+
+	writer := csv.NewWriter(c.Writer)
+	// BOM 让 Excel 正确识别 UTF-8
+	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
+	_ = writer.Write([]string{
+		"时间", "用户ID", "模型", "上游模型", "协议", "渠道", "状态",
+		"提示Token", "完成Token", "推理Token", "合计Token", "点数",
+		"延迟(ms)", "首字(ms)", "工具轮次", "自用", "置信度", "HTTP状态", "错误信息", "TraceID",
+	})
+	for i := range list {
+		e := &list[i]
+		_ = writer.Write([]string{
+			e.CreatedAt.Format(time.RFC3339),
+			strconv.FormatUint(uint64(e.UserID), 10),
+			e.Model,
+			e.UpstreamModel,
+			e.Protocol,
+			e.ChannelName,
+			callStatusText(e.Status),
+			strconv.Itoa(e.PromptTokens),
+			strconv.Itoa(e.CompletionTokens),
+			strconv.Itoa(e.ReasoningTokens),
+			strconv.Itoa(e.TotalTokens),
+			strconv.FormatInt(e.Points, 10),
+			strconv.FormatInt(e.LatencyMS, 10),
+			strconv.FormatInt(e.FirstTokenMS, 10),
+			strconv.Itoa(e.ToolRounds),
+			strconv.FormatBool(e.SelfUse),
+			e.UsageConfidence,
+			strconv.Itoa(e.HTTPStatus),
+			e.ErrorMessage,
+			e.TraceID,
+		})
+	}
+	writer.Flush()
+
+	auditOK(h.svc, c, model.AuditSettingsUpdate, "call_log", "export",
+		"导出 "+strconv.Itoa(len(list))+" 条")
+}
+
+// maxExportRows 单次导出的最大行数。
+const maxExportRows = 10000
+
+// buildCallLogFilter 从查询参数构造日志筛选条件，列表与导出共用。
+func buildCallLogFilter(c *gin.Context, p PageParams) service.CallLogFilter {
+	filter := service.CallLogFilter{
+		Model: c.Query("model"),
+		Start: parseTime(c, "start"),
+		End:   parseTime(c, "end"),
+		Page:  p.Page,
+	}
+	filter.PageSize = p.PageSize
+	if v, err := strconv.ParseUint(c.Query("user_id"), 10, 64); err == nil && v > 0 {
+		filter.UserID = uint(v)
+	}
+	if v, err := strconv.ParseUint(c.Query("api_key_id"), 10, 64); err == nil && v > 0 {
+		filter.APIKeyID = uint(v)
+	}
+	if v, err := strconv.Atoi(c.Query("status")); err == nil {
+		filter.Status = v
+	}
+	return filter
+}
+
+// callStatusText 状态码转文案，便于 CSV 直接阅读。
+func callStatusText(status int) string {
+	switch status {
+	case model.CallStatusSuccess:
+		return "成功"
+	case model.CallStatusFailed:
+		return "失败"
+	default:
+		return "未知"
+	}
 }
 
 // CreateUser 管理端直接创建用户（可指定角色）。

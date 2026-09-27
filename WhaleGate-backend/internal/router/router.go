@@ -185,6 +185,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 		}
 
 		adminGroup.GET("/logs", admin.ListLogs)
+		adminGroup.GET("/logs/export", admin.ExportLogs)
 		adminGroup.GET("/audit-logs", admin.ListAuditLogs)
 
 		oauthGroup := adminGroup.Group("/oauth")

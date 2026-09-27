@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import dayjs, { type Dayjs } from 'dayjs'
+import { DownloadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
+import http from '@/api/http'
 import { adminApi } from '@/api/admin'
 import type { CallLog } from '@/api/types'
 
@@ -78,6 +80,35 @@ function onTableChange(pager: { current?: number; pageSize?: number }) {
   void load()
 }
 
+const exporting = ref(false)
+
+/** 按当前筛选条件导出 CSV（最多 10000 条） */
+async function exportCsv() {
+  exporting.value = true
+  try {
+    const params = buildParams()
+    delete params.page
+    delete params.page_size
+    const response = await http.get<Blob>('/admin/logs/export', {
+      params,
+      responseType: 'blob',
+    })
+    const disposition = String(response.headers['content-disposition'] ?? '')
+    const match = /filename="?([^";]+)"?/.exec(disposition)
+    const url = URL.createObjectURL(response.data)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = match?.[1] ?? 'call-logs.csv'
+    anchor.click()
+    URL.revokeObjectURL(url)
+    message.success('已导出 CSV')
+  } catch {
+    message.error('导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 function formatTime(value?: string) {
   return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '—'
 }
@@ -89,8 +120,14 @@ load()
   <div class="wg-page">
     <a-card>
       <div class="wg-card-title" style="margin-bottom: 16px">
-        <h2 style="margin: 0">全局调用日志</h2>
-        <span class="wg-muted">当前页合计 {{ summary.total }} tokens / {{ summary.points }} 点</span>
+        <div>
+          <h2 style="margin: 0">全局调用日志</h2>
+          <span class="wg-muted">当前页合计 {{ summary.total }} tokens / {{ summary.points }} 点</span>
+        </div>
+        <a-button :loading="exporting" @click="exportCsv">
+          <DownloadOutlined />
+          导出 CSV
+        </a-button>
       </div>
 
       <a-form layout="inline" class="wg-filters">
