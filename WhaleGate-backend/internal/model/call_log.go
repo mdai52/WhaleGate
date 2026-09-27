@@ -40,6 +40,8 @@ type CallLog struct {
 	Points int64 `json:"points"`
 	// SelfUse 该次调用发生在自用模式下（免费）。
 	SelfUse bool `json:"self_use"`
+	// ToolRounds 多轮工具执行轮次，0 表示未使用工具。
+	ToolRounds int `json:"tool_rounds"`
 
 	LatencyMS    int64 `json:"latency_ms"`
 	FirstTokenMS int64 `json:"first_token_ms"`

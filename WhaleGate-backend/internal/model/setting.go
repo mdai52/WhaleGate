@@ -6,6 +6,12 @@ import "time"
 const (
 	// SettingSelfUseMode 自用模式：开启后所有调用不计费。
 	SettingSelfUseMode = "self_use_mode"
+	// SettingSkillsEnabled 是否启用技能注入。
+	SettingSkillsEnabled = "skills_enabled"
+	// SettingMCPEnabled 是否启用 MCP 工具。
+	SettingMCPEnabled = "mcp_enabled"
+	// SettingMCPMaxRounds 网关代执行的最大工具轮次。
+	SettingMCPMaxRounds = "mcp_max_rounds"
 )
 
 // AppSetting 全局运行时设置，value 存放 JSON 文本。

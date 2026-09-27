@@ -68,6 +68,8 @@ func registerAPI(e *gin.Engine, d Deps) {
 	admin := handler.NewAdminHandler(d.Svc)
 	channel := handler.NewChannelHandler(d.Svc)
 	settings := handler.NewSettingsHandler(d.Svc)
+	skill := handler.NewSkillHandler(d.Svc)
+	mcpHandler := handler.NewMCPHandler(d.Svc)
 	usage := handler.NewUsageHandler(d.Svc)
 	oauthHandler := handler.NewOAuthHandler(d.Svc)
 	credentialHandler := handler.NewCredentialHandler(d.Svc)
@@ -146,9 +148,30 @@ func registerAPI(e *gin.Engine, d Deps) {
 			channels.DELETE("/:id", channel.Delete)
 			channels.POST("/:id/test", channel.Test)
 
-			// 全局设置：自用模式等（仅管理员）
+			// 全局设置：自用模式、Skills 与 MCP 开关（仅管理员）
 			adminGroup.GET("/settings", settings.Get)
 			adminGroup.PUT("/settings", settings.Update)
+
+			// 技能管理
+			skills := adminGroup.Group("/skills")
+			{
+				skills.GET("", skill.List)
+				skills.POST("/scan", skill.Scan)
+				skills.PATCH("/:id/toggle", skill.Toggle)
+				skills.DELETE("/:id", skill.Delete)
+			}
+
+			// MCP 服务与工具
+			mcpGroup := adminGroup.Group("/mcp")
+			{
+				mcpGroup.GET("", mcpHandler.List)
+				mcpGroup.POST("", mcpHandler.Create)
+				mcpGroup.PUT("/:id", mcpHandler.Update)
+				mcpGroup.DELETE("/:id", mcpHandler.Delete)
+				mcpGroup.POST("/:id/connect", mcpHandler.Connect)
+				mcpGroup.GET("/tools", mcpHandler.Tools)
+				mcpGroup.POST("/tools/call", mcpHandler.Call)
+			}
 		}
 
 		ratios := adminGroup.Group("/ratios")

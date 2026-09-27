@@ -60,6 +60,62 @@ export interface DetectResult {
   warning?: string
 }
 
+/** MCP 服务 */
+export interface MCPServer {
+  id: number
+  name: string
+  transport: string
+  command: string
+  args: string
+  env: string
+  url: string
+  headers: string
+  enabled: boolean
+  auto_execute: boolean
+  status: string
+  last_error: string
+  tools: string
+  tool_count: number
+  created_at: string
+}
+
+export interface MCPServerInput {
+  name: string
+  transport?: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  url?: string
+  headers?: Record<string, string>
+  enabled?: boolean
+  auto_execute?: boolean
+}
+
+/** 对外暴露的工具 */
+export interface ExposedTool {
+  name: string
+  description: string
+  schema: Record<string, unknown>
+  server_id: number
+  server_name: string
+  tool_name: string
+  auto_execute: boolean
+}
+
+/** 技能 */
+export interface Skill {
+  id: number
+  name: string
+  display_name: string
+  description: string
+  content: string
+  mode: string
+  enabled: boolean
+  source: string
+  file_path: string
+  created_at: string
+}
+
 /** 全局模型目录条目 */
 export interface ModelCatalog {
   id: number

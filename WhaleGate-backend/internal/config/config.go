@@ -25,6 +25,13 @@ type Config struct {
 	Web      WebConfig      `mapstructure:"web"`
 	OAuth    OAuthConfig    `mapstructure:"oauth"`
 	Auth     AuthConfig     `mapstructure:"auth"`
+	Skills   SkillsConfig   `mapstructure:"skills"`
+}
+
+// SkillsConfig 技能目录配置。
+type SkillsConfig struct {
+	// Dir SKILL.md 扫描根目录，为空表示不启用目录扫描。
+	Dir string `mapstructure:"dir"`
 }
 
 // GitHubAuthConfig GitHub 第三方登录/绑定配置。
@@ -296,7 +303,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.jwt_issuer", "whalegate")
 	v.SetDefault("security.api_key_prefix", "sk-")
 	v.SetDefault("security.api_key_random_bytes", 32)
-	v.SetDefault("security.allow_registration", true)
+	v.SetDefault("skills.dir", "skills")
 	v.SetDefault("security.secure_headers", true)
 	v.SetDefault("security.csp", "")
 	v.SetDefault("security.frame_options", "DENY")

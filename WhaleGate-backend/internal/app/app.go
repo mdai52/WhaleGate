@@ -200,6 +200,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// 关闭 MCP 子进程连接，避免残留孤儿进程。
+	service.ShutdownMCP()
+
 	var errs []error
 	if a.Server != nil {
 		if err := a.Server.Shutdown(shutdownCtx); err != nil {

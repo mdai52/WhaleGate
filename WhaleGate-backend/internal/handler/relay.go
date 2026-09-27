@@ -150,11 +150,15 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 		}
 	}
 
+	// Skills 与 MCP 注入：解析后只做一次，重试不会重复注入。
+	autoExecute, maxRounds := h.applyEnhancements(c, req)
+
 	start := time.Now()
 	attempts := 1 + h.svc.Config.Gateway.MaxRetries
 	exclude := make(map[uint]struct{}, attempts)
 
 	var lastErr error
+	var toolRounds int
 	for attempt := 0; attempt < attempts; attempt++ {
 		channel, err := h.svc.SelectChannel(ctx, req.Model, exclude)
 		if err != nil {
@@ -165,12 +169,17 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 			break
 		}
 
-		result, err := h.forward(ctx, c, clientProtocol, channel, req)
+		var result *relayOutcome
+		if autoExecute {
+			result, toolRounds, err = h.forwardWithToolLoop(ctx, c, clientProtocol, channel, req, maxRounds)
+		} else {
+			result, err = h.forward(ctx, c, clientProtocol, channel, req)
+		}
 		if err == nil {
 			h.svc.RecordChannelSuccess(ctx, channel)
 			logRelaySuccess(h.svc, channel, req, result, start)
 			h.settleAndLog(c, clientProtocol, req, channel, result, reservation, start,
-				model.CallStatusSuccess, c.Writer.Status(), 0, "", selfUse)
+				model.CallStatusSuccess, c.Writer.Status(), 0, "", selfUse, toolRounds)
 			return
 		}
 
@@ -193,7 +202,7 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 	}
 
 	h.settleAndLog(c, clientProtocol, req, nil, nil, reservation, start,
-		model.CallStatusFailed, 0, apierr.CodeOf(lastErr), errorMessage(lastErr), selfUse)
+		model.CallStatusFailed, 0, apierr.CodeOf(lastErr), errorMessage(lastErr), selfUse, toolRounds)
 	writeRelayError(c, clientProtocol, lastErr)
 }
 
@@ -211,6 +220,7 @@ func (h *RelayHandler) settleAndLog(
 	errorCode int,
 	errorMessage string,
 	selfUse bool,
+	toolRounds int,
 ) {
 	usage, confidence := resolveUsage(h.svc, req, outcome)
 
@@ -248,6 +258,7 @@ func (h *RelayHandler) settleAndLog(
 		CompletionTokens: usage.CompletionTokens,
 		ReasoningTokens:  usage.ReasoningTokens,
 		TotalTokens:      usage.TotalTokens,
+		ToolRounds:       toolRounds,
 		Points:           points,
 		LatencyMS:        time.Since(start).Milliseconds(),
 		Status:           status,

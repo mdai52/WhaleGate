@@ -1,16 +1,35 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { LockOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { authApi } from '@/api/auth'
 import { settingsApi } from '@/api/settings'
 import { useUserStore } from '@/stores/user'
+import type { Settings } from '@/api/settings'
 
 const userStore = useUserStore()
 
 const loading = ref(false)
 const saving = ref(false)
-const selfUseMode = ref(false)
+const settings = reactive<Settings>({
+  self_use_mode: false,
+  skills_enabled: false,
+  mcp_enabled: false,
+  mcp_max_rounds: 5,
+})
+
+const selfUseMode = computed({
+  get: () => settings.self_use_mode,
+  set: (v: boolean) => void applyChange({ self_use_mode: v }),
+})
+const skillsEnabled = computed({
+  get: () => settings.skills_enabled,
+  set: (v: boolean) => void applyChange({ skills_enabled: v }),
+})
+const mcpEnabled = computed({
+  get: () => settings.mcp_enabled,
+  set: (v: boolean) => void applyChange({ mcp_enabled: v }),
+})
 
 const pwd = reactive({
   old_password: '',
@@ -34,7 +53,7 @@ async function load() {
   loading.value = true
   try {
     const res = await settingsApi.get()
-    selfUseMode.value = res.self_use_mode
+    Object.assign(settings, res)
   } catch {
     message.error('加载设置失败')
   } finally {
@@ -42,18 +61,26 @@ async function load() {
   }
 }
 
-async function toggleSelfUse(checked: boolean) {
+/** 局部更新：始终提交完整设置，避免其他开关被误覆盖 */
+async function applyChange(patch: Partial<Settings>, successText?: string) {
   saving.value = true
+  const snapshot = { ...settings }
   try {
-    const res = await settingsApi.update({ self_use_mode: checked })
-    selfUseMode.value = res.self_use_mode
-    message.success(res.self_use_mode ? '已开启自用模式，所有调用不再计费' : '已关闭自用模式，恢复计费')
+    const res = await settingsApi.update({ ...settings, ...patch })
+    Object.assign(settings, res)
+    if (successText) {
+      message.success(successText)
+    }
   } catch {
-    selfUseMode.value = !checked
+    Object.assign(settings, snapshot)
     message.error('更新失败')
   } finally {
     saving.value = false
   }
+}
+
+async function applyMaxRounds() {
+  await applyChange({ mcp_max_rounds: settings.mcp_max_rounds }, '已保存最大轮次')
 }
 
 async function submitPassword() {
@@ -115,8 +142,51 @@ onMounted(load)
           :loading="saving"
           checked-children="开"
           un-checked-children="关"
-          @change="toggleSelfUse"
+          @change="(v: boolean) => applyChange({ self_use_mode: v }, v ? '已开启自用模式，所有调用不再计费' : '已关闭自用模式，恢复计费')"
         />
+      </div>
+    </a-card>
+
+    <a-card title="技能与工具" :loading="loading" style="margin-top: 16px">
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">技能注入</div>
+          <div class="wg-muted">开启后把启用技能的正文（或索引）并入 system 提示词</div>
+        </div>
+        <a-switch
+          :checked="skillsEnabled"
+          :loading="saving"
+          checked-children="开"
+          un-checked-children="关"
+          @change="(v: boolean) => applyChange({ skills_enabled: v }, v ? '已开启技能注入' : '已关闭技能注入')"
+        />
+      </div>
+
+      <a-divider style="margin: 12px 0" />
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">MCP 工具</div>
+          <div class="wg-muted">开启后把 MCP 服务发现的工具注入请求（透传或网关代执行）</div>
+        </div>
+        <a-switch
+          :checked="mcpEnabled"
+          :loading="saving"
+          checked-children="开"
+          un-checked-children="关"
+          @change="(v: boolean) => applyChange({ mcp_enabled: v }, v ? '已开启 MCP 工具' : '已关闭 MCP 工具')"
+        />
+      </div>
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">最大工具轮次</div>
+          <div class="wg-muted">网关代执行时最多执行多少轮工具调用（1-10）</div>
+        </div>
+        <a-space>
+          <a-input-number v-model:value="settings.mcp_max_rounds" :min="1" :max="10" style="width: 100px" />
+          <a-button :loading="saving" @click="applyMaxRounds">保存</a-button>
+        </a-space>
       </div>
     </a-card>
 

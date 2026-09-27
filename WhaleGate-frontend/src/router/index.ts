@@ -74,6 +74,18 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'OAuth 登录', icon: 'SafetyCertificateOutlined', admin: true, group: '凭证' },
       },
       {
+        path: 'admin/mcp',
+        name: 'admin-mcp',
+        component: () => import('@/views/admin/MCPView.vue'),
+        meta: { title: 'MCP 服务', icon: 'DeploymentUnitOutlined', admin: true, group: '工具' },
+      },
+      {
+        path: 'admin/skills',
+        name: 'admin-skills',
+        component: () => import('@/views/admin/SkillsView.vue'),
+        meta: { title: '技能管理', icon: 'BulbOutlined', admin: true, group: '工具' },
+      },
+      {
         path: 'admin/credentials',
         name: 'admin-credentials',
         component: () => import('@/views/admin/CredentialsView.vue'),
