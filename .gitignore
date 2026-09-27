@@ -1,0 +1,42 @@
+# Binaries / build output
+/bin/
+/out/
+/tmp/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Local runtime data
+/logs/
+*.log
+*.pid
+*.sqlite
+.env
+.env.local
+.Trash-0/
+# 本地端到端验证脚本（依赖本地 mock 上游，不入库）
+/scripts/
+WhaleGate-backend/configs/config.yaml
+!WhaleGate-backend/configs/config.example.yaml
+
+# Go
+WhaleGate-backend/coverage.out
+WhaleGate-backend/coverage.html
+*.test
+
+# Node
+WhaleGate-frontend/node_modules/
+WhaleGate-frontend/dist/
+WhaleGate-frontend/.vite/
+.webcache/
+npm-debug.log*
+pnpm-debug.log*
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

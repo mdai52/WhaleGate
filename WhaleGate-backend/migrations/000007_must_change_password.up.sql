@@ -1,0 +1,3 @@
+-- 首次登录强制修改密码
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;

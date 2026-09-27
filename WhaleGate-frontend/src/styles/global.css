@@ -1,0 +1,39 @@
+:root {
+  --wg-bg: #f5f7fa;
+  /* 与 logo 主色保持一致 */
+  --wg-primary: #023b82;
+  --wg-primary-soft: #e8f0fb;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--wg-bg);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue',
+    Arial, sans-serif;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.wg-page {
+  padding: 24px;
+}
+
+.wg-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 576px) {
+  .wg-page {
+    padding: 12px;
+  }
+}

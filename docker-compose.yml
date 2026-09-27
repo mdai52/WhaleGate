@@ -1,0 +1,67 @@
+name: whalegate
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-whalegate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whalegate}
+      POSTGRES_DB: ${POSTGRES_DB:-whalegate}
+      TZ: Asia/Shanghai
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whalegate} -d ${POSTGRES_DB:-whalegate}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: wg-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    container_name: wg-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      WG_SERVER_PORT: "8080"
+      WG_DATABASE_HOST: postgres
+      WG_DATABASE_PORT: "5432"
+      WG_REDIS_HOST: redis
+      WG_REDIS_PORT: "6379"
+      WG_SECURITY_JWT_SECRET: ${JWT_SECRET:-please-change-me}
+      WG_SECURITY_ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      WG_WEB_DIST_DIR: /app/WhaleGate-frontend/dist
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - ./WhaleGate-backend/configs:/app/configs:ro
+      - ./WhaleGate-backend/migrations:/app/migrations:ro
+
+volumes:
+  pgdata:
+  redisdata:

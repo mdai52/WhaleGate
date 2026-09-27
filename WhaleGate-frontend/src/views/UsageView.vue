@@ -1,0 +1,163 @@
+<script setup lang="ts">
+import { computed, reactive, ref } from 'vue'
+import dayjs, { type Dayjs } from 'dayjs'
+import { message } from 'ant-design-vue'
+import { usageApi } from '@/api/usage'
+import { useIsMobile } from '@/composables/useIsMobile'
+import type { CallLog } from '@/api/types'
+
+const isMobile = useIsMobile()
+const loading = ref(false)
+const items = ref<CallLog[]>([])
+const pagination = reactive({ current: 1, pageSize: 20, total: 0 })
+
+const filters = reactive({
+  model: '',
+  status: undefined as number | undefined,
+  range: null as [Dayjs, Dayjs] | null,
+})
+
+const columns = [
+  { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 170 },
+  { title: '模型', dataIndex: 'model', key: 'model' },
+  { title: '上游模型', dataIndex: 'upstream_model', key: 'upstream_model' },
+  { title: 'Token', key: 'tokens', width: 170 },
+  { title: '点数', dataIndex: 'points', key: 'points', width: 80 },
+  { title: '耗时', dataIndex: 'latency_ms', key: 'latency_ms', width: 90 },
+  { title: '首字延迟', dataIndex: 'first_token_ms', key: 'first_token_ms', width: 100 },
+  { title: '状态', dataIndex: 'status', key: 'status', width: 120 },
+]
+
+const summary = computed(() => ({
+  tokens: items.value.reduce((acc, i) => acc + i.total_tokens, 0),
+  points: items.value.reduce((acc, i) => acc + i.points, 0),
+}))
+
+async function load() {
+  loading.value = true
+  try {
+    const res = await usageApi.logs({
+      page: pagination.current,
+      page_size: pagination.pageSize,
+      model: filters.model || undefined,
+      status: filters.status,
+      start: filters.range?.length === 2 ? filters.range[0].toISOString() : undefined,
+      end: filters.range?.length === 2 ? filters.range[1].toISOString() : undefined,
+    })
+    items.value = res.items
+    pagination.total = res.total
+  } catch {
+    message.error('加载调用历史失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+function resetFilters() {
+  filters.model = ''
+  filters.status = undefined
+  filters.range = null
+  pagination.current = 1
+  void load()
+}
+
+function onTableChange(pager: { current?: number; pageSize?: number }) {
+  pagination.current = pager.current ?? 1
+  pagination.pageSize = pager.pageSize ?? 20
+  void load()
+}
+
+function formatTime(value?: string) {
+  return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '—'
+}
+
+load()
+</script>
+
+<template>
+  <div class="wg-page">
+    <a-card>
+      <div class="wg-card-title" style="margin-bottom: 16px">
+        <h2 style="margin: 0">调用历史</h2>
+        <span class="wg-muted">当前页合计 {{ summary.tokens }} tokens / {{ summary.points }} 点</span>
+      </div>
+
+      <a-form layout="inline" class="wg-filters">
+        <a-form-item label="模型">
+          <a-input v-model:value="filters.model" placeholder="不限" allow-clear style="width: 180px" />
+        </a-form-item>
+        <a-form-item label="状态">
+          <a-select v-model:value="filters.status" placeholder="不限" allow-clear style="width: 110px">
+            <a-select-option :value="1">成功</a-select-option>
+            <a-select-option :value="2">失败</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="时间范围">
+          <a-range-picker v-model:value="filters.range" show-time style="width: 320px" />
+        </a-form-item>
+        <a-form-item>
+          <a-space>
+            <a-button type="primary" @click="load">查询</a-button>
+            <a-button @click="resetFilters">重置</a-button>
+          </a-space>
+        </a-form-item>
+      </a-form>
+
+      <a-table
+        :columns="columns"
+        :data-source="items"
+        :loading="loading"
+        row-key="id"
+        size="small"
+        :scroll="{ x: isMobile ? 1000 : undefined }"
+        :pagination="{
+          current: pagination.current,
+          pageSize: pagination.pageSize,
+          total: pagination.total,
+          showSizeChanger: true,
+          showTotal: (total: number) => `共 ${total} 条`,
+        }"
+        @change="onTableChange"
+      >
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'created_at'">
+            {{ formatTime((record as CallLog).created_at) }}
+          </template>
+          <template v-else-if="column.key === 'tokens'">
+            <span class="wg-muted">P</span> {{ (record as CallLog).prompt_tokens }}
+            <span class="wg-muted">/ C</span> {{ (record as CallLog).completion_tokens }}
+            <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple">
+              思维链 {{ (record as CallLog).reasoning_tokens }}
+            </a-tag>
+          </template>
+          <template v-else-if="column.key === 'latency_ms'">
+            {{ (record as CallLog).latency_ms }} ms
+          </template>
+          <template v-else-if="column.key === 'first_token_ms'">
+            {{ (record as CallLog).first_token_ms || '—' }}
+          </template>
+          <template v-else-if="column.key === 'status'">
+            <a-tag :color="(record as CallLog).status === 1 ? 'green' : 'red'">
+              {{ (record as CallLog).status === 1 ? '成功' : '失败' }}
+            </a-tag>
+            <a-tag v-if="(record as CallLog).usage_confidence === 'estimated'" color="orange">估算</a-tag>
+            <div v-if="(record as CallLog).error_message" class="wg-muted">
+              {{ (record as CallLog).error_message }}
+            </div>
+          </template>
+        </template>
+      </a-table>
+    </a-card>
+  </div>
+</template>
+
+<style scoped>
+.wg-filters {
+  margin-bottom: 16px;
+  row-gap: 8px;
+}
+
+.wg-muted {
+  color: rgba(0, 0, 0, 0.45);
+}
+</style>

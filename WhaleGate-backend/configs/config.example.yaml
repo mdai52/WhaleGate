@@ -1,0 +1,153 @@
+# 鲸闸 WhaleGate 配置示例
+# 所有字段均可通过环境变量覆盖：WG_<SECTION>_<KEY>（. 与 - 转为 _）
+# 例：WG_DATABASE_HOST=postgres  覆盖 database.host
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  mode: debug # debug | release | test
+  read_timeout: 30s
+  write_timeout: 600s # 流式响应耗时较长，需放宽容忍
+  idle_timeout: 120s
+  shutdown_timeout: 15s
+  body_limit: 32MB
+
+log:
+  level: info # debug | info | warn | error
+  format: json # json | console
+  output: stdout # stdout | file
+  caller: true
+  stacktrace: error
+  file:
+    path: ./logs/whalegate.log
+    max_size: 100 # MB
+    max_backups: 7
+    max_age: 30 # 天
+    compress: true
+
+database:
+  host: 127.0.0.1
+  port: 5432
+  user: whalegate
+  password: whalegate
+  dbname: whalegate
+  sslmode: disable
+  timezone: Asia/Shanghai
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 1h
+  slow_threshold: 500ms
+  auto_migrate: true # 启动时自动执行 migrations/
+  migration_dir: ./migrations
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 100
+  min_idle_conns: 10
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+  key_prefix: wg
+
+security:
+  jwt_secret: please-change-me-in-production
+  jwt_ttl: 24h
+  jwt_issuer: whalegate
+  api_key_prefix: sk-
+  api_key_random_bytes: 32
+  # 32 字节密钥，用于 AES-256-GCM 加密渠道上游密钥
+  encryption_key: 0123456789abcdef0123456789abcdef
+  # 是否允许开放注册（false 时仅管理员可创建用户）
+  allow_registration: true
+  # 安全响应头（CSP / X-Frame-Options / Referrer-Policy 等）
+  secure_headers: true
+  # 自定义 CSP，留空使用内置策略（AntDV 需要 style-src 'unsafe-inline'）
+  csp: ""
+  frame_options: DENY
+  # 启用 HTTPS 后建议设置（秒），0 表示不下发 HSTS
+  hsts_max_age: 0
+  # 登录防爆破：连续失败次数与锁定时长（秒）
+  login_max_attempts: 5
+  login_lock_seconds: 900
+  # 首次安装（用户表为空）时自动创建管理员账号 admin
+  # 随机初始密码只在容器日志中打印一次，其它任何地方均不暴露，首次登录后强制改密
+  bootstrap_admin: true
+  bootstrap_password_length: 24
+
+gateway:
+  upstream_timeout: 300s
+  max_retries: 2
+  retry_backoff: 200ms
+  # 渠道连续失败多少次后自动禁用
+  auto_disable_threshold: 5
+  auto_disable_window: 5m
+  # 单 Key 默认限流（可在 Key 维度覆盖）
+  default_qpm: 60
+  default_concurrency: 8
+  # 倍率兜底（点 / 1K tokens，1 点 = 0.001 元），未命中模型倍率表时使用
+  default_prompt_ratio: 15
+  default_completion_ratio: 60
+  # 上游未返回 usage 时，按该值估算输出 token 数
+  estimate_completion_tokens: 1024
+  # 额度增量落库周期
+  quota_flush_interval: 5s
+  # 余额不足时的拒绝阈值（点）
+  min_balance: 0
+
+cors:
+  enable: true
+  allow_origins:
+    - "*"
+  allow_methods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  allow_headers:
+    - Authorization
+    - Content-Type
+    - X-Request-ID
+  max_age: 12h
+
+web:
+  # 前端静态资源目录，存在时自动挂载 SPA
+  # 相对路径基于进程工作目录（本地开发在 WhaleGate-backend/ 下启动，故取 ../WhaleGate-frontend/dist）
+  dist_dir: ../WhaleGate-frontend/dist
+  enable: true
+
+auth:
+  # 前端地址，第三方登录完成后跳转回前端
+  frontend_base: http://localhost:5173
+  github:
+    # GitHub 第三方登录 / 账号绑定
+    enabled: false
+    client_id: ""
+    client_secret: ""
+    # 回调地址固定为 {前端访问网关的同源地址}/api/v1/auth/github/callback，
+    # 需在 GitHub OAuth App 中登记为 http(s)://<gateway-host>/api/v1/auth/github/callback
+    scopes: ["read:user", "user:email"]
+  webauthn:
+    # 通行密钥（Passkey）
+    enabled: true
+    rp_id: localhost
+    rp_display_name: 鲸闸 WhaleGate
+    # 浏览器来源，必须与浏览器地址栏一致（含端口）
+    rp_origins: ["http://localhost:5173"]
+
+oauth:
+  # OAuth 供应商：内置 anthropic 与 codex（CLI 端点），其余按需在此补充。
+  # 未公开文档化端点的服务（如 Kimi、Muse）需要自行提供 client_id 与端点。
+  providers: []
+  #  - id: kimi-cn
+  #    name: Kimi 国内站
+  #    description: 通过设备码授权登录 kimi.com
+  #    flow: device_code          # device_code 或 authorization_code
+  #    device_auth_url: https://kimi.com/oauth/device
+  #    token_url: https://kimi.com/oauth/token
+  #    client_id: your-client-id
+  #    scopes: []

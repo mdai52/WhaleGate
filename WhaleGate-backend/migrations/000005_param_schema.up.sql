@@ -1,0 +1,6 @@
+-- 参数能力声明与参数分配审计
+
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS param_schema TEXT NOT NULL DEFAULT '{}';
+
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS params_applied TEXT NOT NULL DEFAULT '';
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS params_dropped TEXT NOT NULL DEFAULT '';
