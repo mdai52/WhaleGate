@@ -24,12 +24,14 @@ main:
       services:
         - docker
       env:
-        IMAGE: ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG}/whalegate
         TAG: ${CNB_COMMIT_SHORT}
       stages:
         - name: 构建并推送
           image: docker:27-cli
           script: |
+            # 镜像仓库名必须全小写，仓库 slug 含大写需转换
+            REPO=$(echo "${CNB_REPO_SLUG}" | tr '[:upper:]' '[:lower:]')
+            IMAGE="${CNB_DOCKER_REGISTRY}/${REPO}/whalegate"
             docker login -u ${CNB_TOKEN_USER_NAME} -p ${CNB_TOKEN} ${CNB_DOCKER_REGISTRY}
             docker build --build-arg VERSION=${CNB_COMMIT_SHORT} -t $IMAGE:$TAG -t $IMAGE:latest .
             docker push $IMAGE:$TAG
@@ -41,12 +43,13 @@ $:
     - name: 发布版本镜像
       services:
         - docker
-      env:
-        IMAGE: ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG}/whalegate
       stages:
         - name: 构建并推送
           image: docker:27-cli
           script: |
+            # 镜像仓库名必须全小写，仓库 slug 含大写需转换
+            REPO=$(echo "${CNB_REPO_SLUG}" | tr '[:upper:]' '[:lower:]')
+            IMAGE="${CNB_DOCKER_REGISTRY}/${REPO}/whalegate"
             docker login -u ${CNB_TOKEN_USER_NAME} -p ${CNB_TOKEN} ${CNB_DOCKER_REGISTRY}
             docker build --build-arg VERSION=${CNB_BRANCH} -t $IMAGE:${CNB_BRANCH} -t $IMAGE:latest .
             docker push $IMAGE:${CNB_BRANCH}
