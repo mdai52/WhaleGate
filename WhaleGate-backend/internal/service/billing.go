@@ -175,6 +175,11 @@ func (c *Container) AdjustQuota(ctx context.Context, userID uint, delta int64) (
 		if err := tx.Clauses(gormLock()).Where("id = ?", userID).First(&user).Error; err != nil {
 			return apierr.Wrap(apierr.ErrNotFound, err)
 		}
+		// 不允许把额度调成负数：负余额会让该用户所有调用直接 402 且难以恢复
+		if next := user.Quota + delta; next < 0 {
+			return apierr.Errorf(apierr.ErrInvalidParam,
+				"调整后额度不能为负：当前 %d，本次变更 %d", user.Quota, delta)
+		}
 		if err := tx.Model(&model.User{}).Where("id = ?", userID).
 			UpdateColumn("quota", gorm.Expr("quota + ?", delta)).Error; err != nil {
 			return apierr.Wrap(apierr.ErrDatabase, err)
