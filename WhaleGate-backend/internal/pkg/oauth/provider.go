@@ -53,6 +53,8 @@ type Provider struct {
 	DeviceAuthURL string `json:"device_auth_url,omitempty"`
 	// ClientID 客户端 ID，可来自内置值或配置。
 	ClientID string `json:"-"`
+	// ClientSecret 客户端密钥（部分供应商如 Google 的令牌端点要求）。
+	ClientSecret string `json:"-"`
 	// Scopes 授权范围。
 	Scopes []string `json:"scopes,omitempty"`
 	// UsesPKCE 是否使用 PKCE。

@@ -274,6 +274,10 @@ func (s *Sessions) exchange(ctx context.Context, p *Provider, form map[string]st
 			body[k] = v
 		}
 	}
+	// 部分供应商（如 Google）的令牌端点要求携带客户端密钥
+	if p.ClientSecret != "" {
+		body["client_secret"] = p.ClientSecret
+	}
 
 	var (
 		data []byte

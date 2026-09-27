@@ -60,6 +60,21 @@ func ParseCredentialFile(content []byte) (*ParsedFile, error) {
 		return out, nil
 	}
 
+	// Google Cloud 服务账号（Vertex JSON 登录）：整个 JSON 加密保存，
+	// 后续绑定到 vertex 类渠道时用它换取短期访问令牌。
+	if t, _ := raw["type"].(string); t == "service_account" {
+		email, _ := raw["client_email"].(string)
+		if email == "" {
+			return nil, fmt.Errorf("服务账号文件缺少 client_email")
+		}
+		return &ParsedFile{
+			Provider:    "vertex",
+			TokenType:   "service_account",
+			Account:     email,
+			AccessToken: string(content),
+		}, nil
+	}
+
 	// 通用格式
 	out := &ParsedFile{}
 	out.AccessToken, _ = raw["access_token"].(string)
