@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -41,7 +42,14 @@ func (h *OAuthHandler) Start(c *gin.Context) {
 	var req startRequest
 	_ = c.ShouldBindJSON(&req)
 
-	result, err := h.svc.OAuth.StartAuthorization(provider, req.RedirectURI)
+	// redirect_uri 为空时回退到配置的前端地址，避免授权 URL 缺少该必需参数
+	// （Google 等会直接报 Missing required parameter: redirect_uri）。
+	redirectURI := req.RedirectURI
+	if redirectURI == "" {
+		redirectURI = strings.TrimRight(h.svc.Config.Auth.FrontendBase, "/")
+	}
+
+	result, err := h.svc.OAuth.StartAuthorization(provider, redirectURI)
 	if err != nil {
 		response.Fail(c, apierr.Wrap(apierr.ErrInvalidParam, err))
 		return

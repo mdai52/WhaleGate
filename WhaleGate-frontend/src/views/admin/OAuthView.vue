@@ -54,7 +54,10 @@ async function load() {
 
 async function start(provider: OAuthProvider) {
   try {
-    const res = await oauthApi.start(provider.id)
+    // 将当前站点作为 OAuth 回调地址传给后端，用户授权后会被重定向回本站，
+    // 即可从地址栏复制 code 粘贴回来；该地址需在对应 OAuth 应用中登记为授权回调 URI。
+    const redirectURI = window.location.origin
+    const res = await oauthApi.start(provider.id, redirectURI)
     active.value = res
     activeName.value = provider.name
     authCode.value = ''

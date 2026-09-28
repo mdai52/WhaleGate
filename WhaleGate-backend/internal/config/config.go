@@ -82,6 +82,9 @@ type OAuthProviderConfig struct {
 	TokenURL string `mapstructure:"token_url"`
 	// DeviceAuthURL 设备码申请端点。
 	DeviceAuthURL string `mapstructure:"device_auth_url"`
+	// RedirectURI 授权回调地址（授权码流程）。需在对应 OAuth 应用中登记为授权回调 URI。
+	// 前端发起授权时若显式传入则优先使用，否则回退到本配置或 auth.frontend_base。
+	RedirectURI string `mapstructure:"redirect_uri"`
 	// ClientID 客户端 ID。
 	ClientID string `mapstructure:"client_id"`
 	// Scopes 授权范围。

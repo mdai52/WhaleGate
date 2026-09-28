@@ -132,6 +132,10 @@ func (s *Sessions) StartAuthorization(p *Provider, redirectURI string) (*StartRe
 		if p.UsesPKCE {
 			sess.redirectURI = redirectURI
 		}
+		// 未显式传入时，回退到供应商配置里的回调地址。
+		if sess.redirectURI == "" {
+			sess.redirectURI = p.RedirectURI
+		}
 
 		q := url.Values{}
 		q.Set("response_type", "code")

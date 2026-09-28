@@ -167,3 +167,6 @@ oauth:
   #    token_url: https://kimi.com/oauth/token
   #    client_id: your-client-id
   #    scopes: []
+  #    # 授权码流程（authorization_code）必须填写回调地址，且需在对应 OAuth 应用中登记；
+  #    # 前端发起授权时若未显式传入，则使用此值，否则回退到 auth.frontend_base。
+  #    redirect_uri: https://your-domain.example.com

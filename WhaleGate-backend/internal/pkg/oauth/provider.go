@@ -51,6 +51,8 @@ type Provider struct {
 	TokenURL string `json:"token_url,omitempty"`
 	// DeviceAuthURL 设备码申请端点（设备码流程）。
 	DeviceAuthURL string `json:"device_auth_url,omitempty"`
+	// RedirectURI 授权码流程的回调地址（需在 OAuth 应用中登记）。
+	RedirectURI string `json:"-"`
 	// ClientID 客户端 ID，可来自内置值或配置。
 	ClientID string `json:"-"`
 	// ClientSecret 客户端密钥（部分供应商如 Google 的令牌端点要求）。
@@ -145,6 +147,7 @@ func LoadFromConfig(items []config.OAuthProviderConfig) {
 			AuthURL:       item.AuthURL,
 			TokenURL:      item.TokenURL,
 			DeviceAuthURL: item.DeviceAuthURL,
+			RedirectURI:   item.RedirectURI,
 			ClientID:      item.ClientID,
 			Scopes:        item.Scopes,
 			UsesPKCE:      true,
