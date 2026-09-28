@@ -378,9 +378,11 @@ func (c *Container) RecordChannelSuccess(ctx context.Context, ch *model.Channel)
 }
 
 // TestChannel 轻量连通性测试：拉取上游模型列表，不产生 token 消耗。
+// 测试失败时会立即将渠道标记为自动禁用，避免失效渠道继续参与转发。
 func (c *Container) TestChannel(ctx context.Context, ch *model.Channel) (map[string]interface{}, error) {
 	key, err := c.DecryptChannelKey(ch)
 	if err != nil {
+		c.disableChannelOnTestFailure(ctx, ch, err.Error())
 		return nil, err
 	}
 
@@ -402,8 +404,8 @@ func (c *Container) TestChannel(ctx context.Context, ch *model.Channel) (map[str
 	start := time.Now()
 	resp, err := gateway.NewUpstream(timeout).Do(ctx, http.MethodGet, url, headers, nil)
 	if err != nil {
-		c.RecordChannelFailure(ctx, ch, err.Error())
-		return nil, apierr.Wrap(apierr.ErrUpstream, err)
+		c.disableChannelOnTestFailure(ctx, ch, err.Error())
+		return nil, apierr.New(apierr.ErrUpstream, "连通性测试失败，渠道已自动禁用："+err.Error())
 	}
 	defer resp.Body.Close()
 
@@ -413,8 +415,8 @@ func (c *Container) TestChannel(ctx context.Context, ch *model.Channel) (map[str
 		if msg == "" {
 			msg = string(body)
 		}
-		c.RecordChannelFailure(ctx, ch, msg)
-		return nil, apierr.Errorf(apierr.ErrUpstream, "上游返回 %d: %s", resp.StatusCode, truncate(msg, 300))
+		c.disableChannelOnTestFailure(ctx, ch, msg)
+		return nil, apierr.Errorf(apierr.ErrUpstream, "连通性测试失败（HTTP %d），渠道已自动禁用：%s", resp.StatusCode, truncate(msg, 300))
 	}
 	c.RecordChannelSuccess(ctx, ch)
 
@@ -422,6 +424,34 @@ func (c *Container) TestChannel(ctx context.Context, ch *model.Channel) (map[str
 		"status":     resp.StatusCode,
 		"latency_ms": time.Since(start).Milliseconds(),
 	}, nil
+}
+
+// disableChannelOnTestFailure 测试失败时立即禁用渠道并清理缓存。
+func (c *Container) disableChannelOnTestFailure(ctx context.Context, ch *model.Channel, reason string) {
+	if ch == nil {
+		return
+	}
+	now := time.Now()
+	patch := map[string]interface{}{
+		"status":      model.ChannelStatusAutoDisabled,
+		"disabled_at": now,
+		"last_error":  truncate(reason, 512),
+	}
+	if err := c.DB.WithContext(ctx).Model(&model.Channel{}).Where("id = ?", ch.ID).Updates(patch).Error; err != nil {
+		if c.Logger != nil {
+			c.Logger.Warn("测试失败自动禁用渠道失败", zap.Uint("channel_id", ch.ID), zap.Error(err))
+		}
+	} else {
+		ch.Status = model.ChannelStatusAutoDisabled
+		ch.LastError = truncate(reason, 512)
+	}
+	c.invalidateChannelCache()
+	if c.RDB != nil {
+		_ = c.RDB.Del(ctx, fmt.Sprintf("%s:chfail:%d", c.prefix(), ch.ID)).Err()
+	}
+	if c.Logger != nil {
+		c.Logger.Warn("渠道测试失败已自动禁用", zap.Uint("channel_id", ch.ID), zap.String("channel", ch.Name), zap.String("reason", reason))
+	}
 }
 
 // enabledChannels 读取启用渠道列表（带 15 秒进程内缓存）。

@@ -348,9 +348,10 @@ async function testChannel(row: Channel) {
   try {
     const res = await channelApi.test(row.id)
     message.success(`连通正常，HTTP ${res.status}，延迟 ${res.latency_ms}ms`)
-    await load()
   } catch {
-    message.error('连通性测试失败，请检查地址与密钥')
+    message.error('连通性测试失败，渠道已自动暂停')
+  } finally {
+    await load()
   }
 }
 
