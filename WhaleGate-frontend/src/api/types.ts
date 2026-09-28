@@ -396,9 +396,16 @@ export interface WebAuthnCredential {
   last_used_at?: string | null
 }
 
+export interface PasskeyConfig {
+  enabled: boolean
+  rp_id: string
+  rp_origins: string[]
+}
+
 export interface BindingsResult {
   identities: UserIdentity[]
   passkeys: WebAuthnCredential[]
   github_enabled: boolean
   passkey_enabled: boolean
+  passkey_config: PasskeyConfig
 }

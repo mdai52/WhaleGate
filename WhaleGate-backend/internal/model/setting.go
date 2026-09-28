@@ -18,6 +18,12 @@ const (
 	SettingTLSCert = "tls_cert"
 	// SettingTLSKey TLS 私钥（PEM，敏感，仅存储不回显）。
 	SettingTLSKey = "tls_key"
+	// SettingPasskeyEnabled 是否启用通行密钥。
+	SettingPasskeyEnabled = "passkey_enabled"
+	// SettingPasskeyRPID 通行密钥依赖方 ID（当前域名或父域）。
+	SettingPasskeyRPID = "passkey_rp_id"
+	// SettingPasskeyRPOrigins 通行密钥允许的源地址，多个以英文逗号分隔。
+	SettingPasskeyRPOrigins = "passkey_rp_origins"
 )
 
 // AppSetting 全局运行时设置，value 存放 JSON 文本。

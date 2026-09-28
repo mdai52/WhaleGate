@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import dayjs from 'dayjs'
 import {
   CheckCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
   DisconnectOutlined,
+  EditOutlined,
   GithubOutlined,
   InfoCircleOutlined,
   MailOutlined,
@@ -34,6 +35,37 @@ const githubBound = computed<UserIdentity | undefined>(() =>
 )
 const passkeys = computed<WebAuthnCredential[]>(() => data.value?.passkeys ?? [])
 const canPasskey = computed(() => data.value?.passkey_enabled === true && passkeySupported())
+
+// 通行密钥配置是否与当前访问域名匹配
+const passkeyOriginMismatch = computed(() => {
+  const cfg = data.value?.passkey_config
+  if (!cfg?.enabled) return false
+  const host = window.location.host
+  const origins = cfg.rp_origins ?? []
+  const originMatched = origins.some((o) => {
+    try {
+      return new URL(o).host === host
+    } catch {
+      return false
+    }
+  })
+  const rpID = cfg.rp_id || ''
+  const rpIDMatched = host === rpID || host.endsWith('.' + rpID)
+  return !originMatched || !rpIDMatched
+})
+
+const passkeyHint = computed(() => {
+  if (!passkeySupported()) {
+    return '当前浏览器不支持 WebAuthn'
+  }
+  if (data.value?.passkey_enabled !== true) {
+    return '服务端未启用通行密钥'
+  }
+  if (passkeyOriginMismatch.value) {
+    return '当前访问域名与通行密钥配置（RP ID / 来源）不匹配，请联系管理员在系统设置中调整'
+  }
+  return ''
+})
 
 async function load() {
   loading.value = true
@@ -167,6 +199,48 @@ async function copyText(value?: string | null) {
   }
 }
 
+// 编辑资料
+const profileModalOpen = ref(false)
+const profileSaving = ref(false)
+const profileForm = reactive({
+  username: '',
+  email: '',
+  nickname: '',
+})
+const profileRules = {
+  username: [
+    { required: true, message: '请输入用户名' },
+    { min: 3, max: 64, message: '用户名长度 3-64 位' },
+    { pattern: /^[a-zA-Z0-9_.-]+$/, message: '仅允许字母、数字、下划线、点、连字符' },
+  ],
+  email: [{ type: 'email', message: '邮箱格式不正确' }],
+}
+
+function openProfileEdit() {
+  profileForm.username = userStore.profile?.username || ''
+  profileForm.email = userStore.profile?.email || ''
+  profileForm.nickname = userStore.profile?.nickname || ''
+  profileModalOpen.value = true
+}
+
+async function saveProfile() {
+  profileSaving.value = true
+  try {
+    const user = await accountApi.updateProfile({
+      username: profileForm.username.trim(),
+      email: profileForm.email.trim() || undefined,
+      nickname: profileForm.nickname.trim() || undefined,
+    })
+    message.success('资料已更新')
+    userStore.profile = { ...userStore.profile!, ...user }
+    profileModalOpen.value = false
+  } catch (e) {
+    message.error('保存失败：' + ((e as Error).message || '请重试'))
+  } finally {
+    profileSaving.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -175,7 +249,13 @@ onMounted(load)
     <a-card :loading="loading" title="账号与安全" class="wg-account-card">
       <!-- 账号信息 -->
       <section class="wg-section-block">
-        <h3 class="wg-section-title"><UserOutlined /> 账号信息</h3>
+        <div class="wg-section-header">
+          <h3 class="wg-section-title"><UserOutlined /> 账号信息</h3>
+          <a-button size="small" @click="openProfileEdit">
+            <EditOutlined />
+            编辑资料
+          </a-button>
+        </div>
         <div class="wg-info-grid">
           <div class="wg-info-item">
             <div class="wg-info-label"><UserOutlined /> 登录账号</div>
@@ -266,11 +346,15 @@ onMounted(load)
         </p>
 
         <a-alert
-          v-if="!canPasskey"
-          type="info"
+          v-if="passkeyHint"
+          :type="passkeyOriginMismatch ? 'warning' : 'info'"
           show-icon
-          :message="'当前环境不支持通行密钥'"
-          :description="'需要 HTTPS 或 localhost，且浏览器支持 WebAuthn。如果你使用 IP 访问或浏览器版本过低，将无法注册。'"
+          :message="passkeyHint"
+          :description="
+            passkeyOriginMismatch
+              ? '当前页面域名与系统设置的 RP ID / 允许来源不一致，管理员可在「系统设置 → 通行密钥」中修改。'
+              : '需要 HTTPS 或 localhost，且浏览器支持 WebAuthn。如果你使用 IP 访问或浏览器版本过低，将无法注册。'
+          "
           style="margin: 12px 0"
         />
 
@@ -377,6 +461,27 @@ onMounted(load)
           extra="授权完成后浏览器会跳转到一个地址，把它整段粘贴到这里；也可只粘贴 code=xxx&state=yyy"
         >
           <a-input v-model:value="authCode" placeholder="http://.../api/v1/auth/github/callback?code=...&state=..." allow-clear />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
+      v-model:open="profileModalOpen"
+      title="编辑账号资料"
+      ok-text="保存"
+      cancel-text="取消"
+      :confirm-loading="profileSaving"
+      @ok="saveProfile"
+    >
+      <a-form layout="vertical" :model="profileForm" :rules="profileRules">
+        <a-form-item label="用户名" name="username">
+          <a-input v-model:value="profileForm.username" placeholder="3-64 位字母、数字、下划线、点或连字符" />
+        </a-form-item>
+        <a-form-item label="昵称" name="nickname">
+          <a-input v-model:value="profileForm.nickname" placeholder="选填" />
+        </a-form-item>
+        <a-form-item label="邮箱" name="email">
+          <a-input v-model:value="profileForm.email" placeholder="选填" />
         </a-form-item>
       </a-form>
     </a-modal>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,12 @@ type Settings struct {
 	TLSKey string `json:"tls_key"`
 	// TLSKeySet 是否已配置私钥（用于前端展示"已配置"）。
 	TLSKeySet bool `json:"tls_key_set"`
+	// PasskeyEnabled 是否启用通行密钥。
+	PasskeyEnabled bool `json:"passkey_enabled"`
+	// PasskeyRPID 通行密钥依赖方 ID。
+	PasskeyRPID string `json:"passkey_rp_id"`
+	// PasskeyRPOrigins 通行密钥允许的源地址，多个以英文逗号分隔。
+	PasskeyRPOrigins string `json:"passkey_rp_origins"`
 }
 
 // 设置默认值。
@@ -108,15 +115,23 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 		in.MCPMaxRounds = maxMCPRounds
 	}
 
+	// 通行密钥配置校验。
+	if in.PasskeyEnabled && strings.TrimSpace(in.PasskeyRPID) == "" {
+		return nil, apierr.New(apierr.ErrInvalidParam, "启用通行密钥时需填写依赖方 ID（RP ID）")
+	}
+
 	now := time.Now()
 	values := map[string]string{
-		model.SettingSelfUseMode:   strconv.FormatBool(in.SelfUseMode),
-		model.SettingSkillsEnabled: strconv.FormatBool(in.SkillsEnabled),
-		model.SettingMCPEnabled:    strconv.FormatBool(in.MCPEnabled),
-		model.SettingMCPMaxRounds:  strconv.Itoa(in.MCPMaxRounds),
-		model.SettingTLSEnabled:    strconv.FormatBool(enabled),
-		model.SettingTLSCert:       cert,
-		model.SettingTLSKey:        key,
+		model.SettingSelfUseMode:     strconv.FormatBool(in.SelfUseMode),
+		model.SettingSkillsEnabled:   strconv.FormatBool(in.SkillsEnabled),
+		model.SettingMCPEnabled:      strconv.FormatBool(in.MCPEnabled),
+		model.SettingMCPMaxRounds:    strconv.Itoa(in.MCPMaxRounds),
+		model.SettingTLSEnabled:      strconv.FormatBool(enabled),
+		model.SettingTLSCert:         cert,
+		model.SettingTLSKey:          key,
+		model.SettingPasskeyEnabled:  strconv.FormatBool(in.PasskeyEnabled),
+		model.SettingPasskeyRPID:     strings.TrimSpace(in.PasskeyRPID),
+		model.SettingPasskeyRPOrigins: strings.TrimSpace(in.PasskeyRPOrigins),
 	}
 	for k, v := range values {
 		row := model.AppSetting{Key: k, Value: v, UpdatedBy: userID, UpdatedAt: now}
@@ -155,6 +170,9 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 	if c.TLSIsEnabled() != enabled {
 		c.requestRestart()
 	}
+
+	// 通行密钥配置变更实时生效，无需重启。
+	c.rebuildWebAuthn(ctx)
 
 	if c.Logger != nil {
 		c.Logger.Info("全局设置已更新",
@@ -219,6 +237,12 @@ func applySetting(out *Settings, key, value string) {
 		out.TLSCert = value
 	case model.SettingTLSKey:
 		out.TLSKeySet = value != ""
+	case model.SettingPasskeyEnabled:
+		out.PasskeyEnabled = value == "true" || value == "1"
+	case model.SettingPasskeyRPID:
+		out.PasskeyRPID = value
+	case model.SettingPasskeyRPOrigins:
+		out.PasskeyRPOrigins = value
 	}
 }
 

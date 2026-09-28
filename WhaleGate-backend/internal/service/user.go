@@ -159,6 +159,44 @@ func (c *Container) GetUserByID(ctx context.Context, id uint) (*model.User, erro
 	return &user, nil
 }
 
+// UpdateProfileInput 用户自助修改资料入参。
+type UpdateProfileInput struct {
+	Username string `json:"username" binding:"required,min=3,max=64"`
+	Email    string `json:"email"`
+	Nickname string `json:"nickname"`
+}
+
+// UpdateProfile 当前用户修改自己的资料。
+func (c *Container) UpdateProfile(ctx context.Context, id uint, in UpdateProfileInput) (*model.User, error) {
+	username := strings.TrimSpace(in.Username)
+	if !usernamePattern.MatchString(username) {
+		return nil, apierr.New(apierr.ErrInvalidParam, "用户名需为 3-64 位字母、数字、下划线、点或连字符")
+	}
+	email := strings.TrimSpace(in.Email)
+	nickname := strings.TrimSpace(in.Nickname)
+
+	var user model.User
+	if err := c.DB.WithContext(ctx).First(&user, id).Error; err != nil {
+		return nil, apierr.Wrap(apierr.ErrNotFound, err)
+	}
+
+	updates := map[string]interface{}{
+		"username": username,
+		"email":    email,
+		"nickname": nickname,
+	}
+	if err := c.DB.WithContext(ctx).Model(&user).Updates(updates).Error; err != nil {
+		if isUniqueViolation(err) {
+			return nil, apierr.New(apierr.Define(apierr.CodeConflict, "用户名或邮箱已被占用"), "")
+		}
+		return nil, apierr.Wrap(apierr.ErrDatabase, err)
+	}
+	user.Username = username
+	user.Email = email
+	user.Nickname = nickname
+	return &user, nil
+}
+
 // ListUsers 分页查询用户。
 func (c *Container) ListUsers(ctx context.Context, keyword string, page, pageSize int) ([]model.User, int64, error) {
 	page, pageSize = normalizePage(page, pageSize)

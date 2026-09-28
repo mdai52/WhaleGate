@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"go.uber.org/zap"
@@ -48,6 +49,16 @@ func handleToUserID(handle []byte) uint {
 		id = id<<8 | uint(b)
 	}
 	return id
+}
+
+// PasskeyConfig 返回当前生效的通行密钥配置摘要，供前端展示与一致性校验。
+func (c *Container) PasskeyConfig() gin.H {
+	enabled, rpID, _, origins := c.passkeyConfig()
+	return gin.H{
+		"enabled": enabled,
+		"rp_id":  rpID,
+		"rp_origins": origins,
+	}
 }
 
 // passkeyEnabled 检查通行密钥是否启用并已初始化。

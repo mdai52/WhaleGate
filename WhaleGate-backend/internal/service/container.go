@@ -2,6 +2,10 @@
 package service
 
 import (
+	"context"
+	"strings"
+	"time"
+
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -9,6 +13,7 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/whalegate/whalegate/internal/config"
+	"github.com/whalegate/whalegate/internal/model"
 	"github.com/whalegate/whalegate/internal/pkg/cache"
 	"github.com/whalegate/whalegate/internal/pkg/jwt"
 	"github.com/whalegate/whalegate/internal/pkg/oauth"
@@ -60,33 +65,96 @@ func New(cfg *config.Config, db *gorm.DB, rdb *redis.Client, lg *zap.Logger) *Co
 	}
 	c.Logs = NewCallLogWriter(db, lg, 4096)
 	c.Audits = NewAuditWriter(db, lg, 2048)
-	c.WebAuthn = buildWebAuthn(cfg, lg)
+	c.WebAuthn = c.buildWebAuthn()
 	c.tlsProvider = newTLSCertProvider()
 	c.restartCh = make(chan struct{}, 1)
 	return c
 }
 
-// buildWebAuthn 按配置构造 WebAuthn 实例，失败时仅告警（不影响其它功能）。
-func buildWebAuthn(cfg *config.Config, lg *zap.Logger) *webauthn.WebAuthn {
-	if cfg == nil || !cfg.Auth.WebAuthn.Enabled {
-		return nil
+// passkeyConfig 返回当前生效的通行密钥配置：数据库设置优先，未设置则回退到配置文件。
+func (c *Container) passkeyConfig() (enabled bool, rpID, rpDisplayName string, origins []string) {
+	cfg := c.Config
+	if cfg == nil {
+		return false, "", "鲸闸 WhaleGate", nil
 	}
-	origins := cfg.Auth.WebAuthn.RPOrigins
+	enabled = cfg.Auth.WebAuthn.Enabled
+	rpID = cfg.Auth.WebAuthn.RPID
+	rpDisplayName = cfg.Auth.WebAuthn.RPDisplayName
+	origins = cfg.Auth.WebAuthn.RPOrigins
 	if len(origins) == 0 {
 		origins = []string{cfg.Auth.FrontendBase}
 	}
+
+	// 数据库设置覆盖配置文件；若数据库未设置则保留配置文件值。
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	settings, _ := c.GetSettings(ctx)
+	if settings == nil {
+		return
+	}
+	if _, ok := c.getRawSetting(ctx, model.SettingPasskeyEnabled); ok {
+		enabled = settings.PasskeyEnabled
+	}
+	if settings.PasskeyRPID != "" {
+		rpID = settings.PasskeyRPID
+	}
+	if settings.PasskeyRPOrigins != "" {
+		origins = parseOrigins(settings.PasskeyRPOrigins, cfg.Auth.FrontendBase)
+	}
+	return
+}
+
+func parseOrigins(raw, fallback string) []string {
+	if raw == "" {
+		if fallback == "" {
+			return nil
+		}
+		return []string{fallback}
+	}
+	var out []string
+	for _, o := range strings.Split(raw, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			out = append(out, o)
+		}
+	}
+	if len(out) == 0 && fallback != "" {
+		out = append(out, fallback)
+	}
+	return out
+}
+
+// buildWebAuthn 按当前生效配置构造 WebAuthn 实例，失败时仅告警（不影响其它功能）。
+func (c *Container) buildWebAuthn() *webauthn.WebAuthn {
+	enabled, rpID, rpDisplayName, origins := c.passkeyConfig()
+	if !enabled {
+		return nil
+	}
 	wa, err := webauthn.New(&webauthn.Config{
-		RPID:          cfg.Auth.WebAuthn.RPID,
-		RPDisplayName: cfg.Auth.WebAuthn.RPDisplayName,
+		RPID:          rpID,
+		RPDisplayName: rpDisplayName,
 		RPOrigins:     origins,
 	})
 	if err != nil {
-		if lg != nil {
-			lg.Warn("通行密钥初始化失败", zap.Error(err))
+		if c.Logger != nil {
+			c.Logger.Warn("通行密钥初始化失败", zap.Error(err))
 		}
 		return nil
 	}
 	return wa
+}
+
+// rebuildWebAuthn 在设置变更后重新构造 WebAuthn 实例。
+func (c *Container) rebuildWebAuthn(ctx context.Context) {
+	wa := c.buildWebAuthn()
+	c.WebAuthn = wa
+	if c.Logger != nil {
+		if wa == nil {
+			c.Logger.Info("通行密钥已禁用或初始化失败")
+		} else {
+			c.Logger.Info("通行密钥配置已更新并生效")
+		}
+	}
 }
 
 // Close 释放容器持有的后台资源（日志与审计异步写入器等）。

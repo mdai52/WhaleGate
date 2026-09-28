@@ -21,6 +21,9 @@ const settings = reactive<Settings>({
   tls_cert: '',
   tls_key: '',
   tls_key_set: false,
+  passkey_enabled: true,
+  passkey_rp_id: '',
+  passkey_rp_origins: '',
 })
 
 // 私钥为敏感字段，仅在编辑时暂存，绝不回填展示。
@@ -223,6 +226,55 @@ onMounted(load)
           <a-button :loading="saving" @click="applyMaxRounds">保存</a-button>
         </a-space>
       </div>
+    </a-card>
+
+    <a-card title="通行密钥（Passkey）" :loading="loading" style="margin-top: 16px">
+      <a-alert
+        type="info"
+        show-icon
+        style="margin-bottom: 16px"
+        message="依赖方配置决定浏览器能否注册通行密钥"
+        description="RP ID 应填写当前访问域名或其可注册父域（如 whalegate.example.com 或 example.com）；允许来源需包含完整协议与端口，多个地址用英文逗号分隔。修改后立即生效。"
+      />
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">启用通行密钥</div>
+          <div class="wg-muted">关闭后所有用户都无法添加或使用通行密钥登录</div>
+        </div>
+        <a-switch
+          v-model:checked="settings.passkey_enabled"
+          checked-children="开"
+          un-checked-children="关"
+        />
+      </div>
+
+      <a-divider style="margin: 12px 0" />
+
+      <a-form layout="vertical" style="max-width: 560px">
+        <a-form-item label="依赖方 ID（RP ID）">
+          <a-input
+            v-model:value="settings.passkey_rp_id"
+            placeholder="例如：whalegate.example.com"
+          />
+        </a-form-item>
+        <a-form-item label="允许来源（RP Origins）" extra="多个以英文逗号分隔，如 https://whalegate.example.com, http://localhost:5173">
+          <a-textarea
+            v-model:value="settings.passkey_rp_origins"
+            :rows="3"
+            placeholder="https://whalegate.example.com"
+          />
+        </a-form-item>
+      </a-form>
+
+      <a-divider style="margin: 12px 0" />
+      <a-button type="primary" :loading="saving" @click="applyChange({
+        passkey_enabled: settings.passkey_enabled,
+        passkey_rp_id: settings.passkey_rp_id,
+        passkey_rp_origins: settings.passkey_rp_origins,
+      }, '通行密钥配置已保存')">
+        保存通行密钥配置
+      </a-button>
     </a-card>
 
     <a-card title="安全访问（HTTPS）" :loading="loading" style="margin-top: 16px">

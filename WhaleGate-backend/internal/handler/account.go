@@ -51,6 +51,7 @@ func (h *AccountHandler) Bindings(c *gin.Context) {
 		"passkeys":        passkeys,
 		"github_enabled":  h.svc.GitHubEnabled(),
 		"passkey_enabled": h.svc.WebAuthn != nil,
+		"passkey_config":  h.svc.PasskeyConfig(),
 	})
 }
 

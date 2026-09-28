@@ -3,6 +3,7 @@ import type {
   BindingsResult,
   LoginResult,
   UserIdentity,
+  UserProfile,
   WebAuthnCredential,
 } from './types'
 
@@ -10,6 +11,10 @@ export const accountApi = {
   /** 第三方绑定与通行密钥列表 */
   bindings() {
     return request<BindingsResult>({ url: '/account/bindings', method: 'GET' })
+  },
+  /** 更新当前用户资料 */
+  updateProfile(payload: { username: string; email?: string; nickname?: string }) {
+    return request<UserProfile>({ url: '/me', method: 'PUT', data: payload })
   },
   unbindIdentity(id: number) {
     return request<{ id: number; unbound: boolean }>({

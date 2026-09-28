@@ -91,6 +91,31 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	response.OK(c, user)
 }
 
+type updateProfileRequest struct {
+	Username string `json:"username" binding:"required,min=3,max=64"`
+	Email    string `json:"email"`
+	Nickname string `json:"nickname"`
+}
+
+// UpdateProfile 更新当前登录用户资料。
+func (h *AuthHandler) UpdateProfile(c *gin.Context) {
+	var req updateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, bindError(err))
+		return
+	}
+	user, err := h.svc.UpdateProfile(c.Request.Context(), CurrentUserID(c), service.UpdateProfileInput{
+		Username: req.Username,
+		Email:    req.Email,
+		Nickname: req.Nickname,
+	})
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, user)
+}
+
 // Logout 登出。令牌无状态，服务端仅回执，客户端需自行丢弃令牌。
 func (h *AuthHandler) Logout(c *gin.Context) {
 	auditOK(h.svc, c, model.AuditLogout, "user", strconv.FormatUint(uint64(CurrentUserID(c)), 10), "")

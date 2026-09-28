@@ -110,6 +110,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 		authed.POST("/auth/change-password", auth.ChangePassword)
 		// /me 需要返回 must_change_password，不能拦截
 		authed.GET("/me", auth.Me)
+		authed.PUT("/me", auth.UpdateProfile)
 	}
 
 	// 其余已登录接口在"未修改初始密码"时被拦截

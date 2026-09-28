@@ -17,6 +17,12 @@ export interface Settings {
   tls_key: string
   /** 是否已配置私钥 */
   tls_key_set: boolean
+  /** 是否启用通行密钥 */
+  passkey_enabled: boolean
+  /** 通行密钥依赖方 ID */
+  passkey_rp_id: string
+  /** 通行密钥允许的源地址，多个以英文逗号分隔 */
+  passkey_rp_origins: string
 }
 
 export const settingsApi = {
