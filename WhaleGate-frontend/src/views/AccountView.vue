@@ -2,10 +2,16 @@
 import { computed, onMounted, ref } from 'vue'
 import dayjs from 'dayjs'
 import {
+  CheckCircleOutlined,
+  CopyOutlined,
   DeleteOutlined,
+  DisconnectOutlined,
   GithubOutlined,
+  InfoCircleOutlined,
+  MailOutlined,
   PlusOutlined,
   SafetyCertificateOutlined,
+  UserOutlined,
 } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { accountApi } from '@/api/account'
@@ -151,97 +157,210 @@ function formatTime(value?: string | null) {
   return value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—'
 }
 
+async function copyText(value?: string | null) {
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+    message.success('已复制')
+  } catch {
+    message.warning('复制失败，请手动选择复制')
+  }
+}
+
 onMounted(load)
 </script>
 
 <template>
   <div class="wg-page">
-    <a-card :loading="loading" title="账号与安全">
-      <a-descriptions :column="1" size="small" bordered style="margin-bottom: 24px">
-        <a-descriptions-item label="登录账号">{{ userStore.profile?.username }}</a-descriptions-item>
-        <a-descriptions-item label="角色">
-          {{ userStore.isAdmin ? '管理员' : '普通用户' }}
-        </a-descriptions-item>
-        <a-descriptions-item label="邮箱">{{ userStore.profile?.email || '未设置' }}</a-descriptions-item>
-      </a-descriptions>
-
-      <h3 class="wg-section">
-        <SafetyCertificateOutlined />
-        通行密钥（Passkey）
-      </h3>
-      <p class="wg-muted">
-        使用指纹、人脸或设备 PIN 免密登录；凭据只保存在你的设备上。
-      </p>
-
-      <a-empty
-        v-if="!loading && passkeys.length === 0"
-        description="尚未添加通行密钥"
-        style="padding: 24px 0"
-      />
-      <a-list v-else :data-source="passkeys" item-layout="horizontal" size="small">
-        <template #renderItem="{ item }">
-          <a-list-item>
-            <a-list-item-meta :title="(item as WebAuthnCredential).name">
-              <template #description>
-                <span class="wg-muted">
-                  添加于 {{ formatTime((item as WebAuthnCredential).created_at) }}
-                  <template v-if="(item as WebAuthnCredential).last_used_at">
-                    · 最近使用 {{ formatTime((item as WebAuthnCredential).last_used_at) }}
-                  </template>
-                </span>
-              </template>
-            </a-list-item-meta>
-            <template #actions>
-              <a-button size="small" danger type="text" @click="removePasskey(item as WebAuthnCredential)">
-                <DeleteOutlined />
+    <a-card :loading="loading" title="账号与安全" class="wg-account-card">
+      <!-- 账号信息 -->
+      <section class="wg-section-block">
+        <h3 class="wg-section-title"><UserOutlined /> 账号信息</h3>
+        <div class="wg-info-grid">
+          <div class="wg-info-item">
+            <div class="wg-info-label"><UserOutlined /> 登录账号</div>
+            <div class="wg-info-value">
+              {{ userStore.profile?.username || '—' }}
+              <a-button
+                v-if="userStore.profile?.username"
+                type="link"
+                size="small"
+                class="wg-copy-btn"
+                @click="copyText(userStore.profile?.username)"
+              >
+                <CopyOutlined />
               </a-button>
-            </template>
-          </a-list-item>
-        </template>
-      </a-list>
-
-      <a-button
-        type="primary"
-        style="margin-top: 12px"
-        :disabled="!canPasskey"
-        :loading="binding"
-        @click="addPasskey"
-      >
-        <PlusOutlined />
-        添加通行密钥
-      </a-button>
-      <div v-if="!canPasskey" class="wg-muted" style="margin-top: 8px">
-        当前环境不支持通行密钥（需 HTTPS 或 localhost，且浏览器支持 WebAuthn）
-      </div>
+            </div>
+          </div>
+          <div class="wg-info-item">
+            <div class="wg-info-label"><SafetyCertificateOutlined /> 角色</div>
+            <div class="wg-info-value">
+              <a-tag :color="userStore.isAdmin ? 'red' : 'blue'">
+                {{ userStore.isAdmin ? '管理员' : '普通用户' }}
+              </a-tag>
+            </div>
+          </div>
+          <div class="wg-info-item">
+            <div class="wg-info-label"><MailOutlined /> 邮箱</div>
+            <div class="wg-info-value">
+              {{ userStore.profile?.email || '未设置' }}
+              <a-button
+                v-if="userStore.profile?.email"
+                type="link"
+                size="small"
+                class="wg-copy-btn"
+                @click="copyText(userStore.profile?.email)"
+              >
+                <CopyOutlined />
+              </a-button>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <a-divider />
 
-      <h3 class="wg-section">
-        <GithubOutlined />
-        第三方账号
-      </h3>
-      <p class="wg-muted">绑定后可使用第三方账号快捷登录本系统。</p>
-
-      <div class="wg-bind-list">
-        <div class="wg-bind-card">
-          <div class="wg-bind-main">
-            <div class="wg-bind-name">
-              <GithubOutlined />
-              GitHub
-            </div>
-            <div class="wg-muted">
-              {{ githubBound ? `已绑定：${githubBound.display_name || githubBound.provider_uid}` : '未绑定' }}
+      <!-- 安全状态 -->
+      <section class="wg-section-block">
+        <h3 class="wg-section-title"><CheckCircleOutlined /> 安全状态</h3>
+        <div class="wg-security-grid">
+          <div class="wg-security-item" :class="{ 'is-active': passkeys.length > 0 }">
+            <SafetyCertificateOutlined class="wg-security-icon" />
+            <div>
+              <div class="wg-security-name">通行密钥</div>
+              <div class="wg-security-status">
+                {{ passkeys.length > 0 ? `已添加 ${passkeys.length} 个` : '未添加' }}
+              </div>
             </div>
           </div>
-          <a-space>
-            <a-button v-if="!githubBound" size="small" @click="bindGithub">绑定</a-button>
-            <a-button v-else size="small" danger @click="unbindIdentity(githubBound)">解除</a-button>
-          </a-space>
+          <div class="wg-security-item" :class="{ 'is-active': !!githubBound }">
+            <GithubOutlined class="wg-security-icon" />
+            <div>
+              <div class="wg-security-name">GitHub</div>
+              <div class="wg-security-status">
+                {{ githubBound ? `已绑定：${githubBound.display_name || githubBound.provider_uid}` : '未绑定' }}
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div v-if="data?.github_enabled !== true" class="wg-muted" style="margin-top: 8px">
-        服务端未配置 GitHub OAuth（auth.github.enabled / client_id）
-      </div>
+      </section>
+
+      <a-divider />
+
+      <!-- 通行密钥 -->
+      <section class="wg-section-block">
+        <div class="wg-section-header">
+          <h3 class="wg-section-title"><SafetyCertificateOutlined /> 通行密钥（Passkey）</h3>
+          <a-button
+            type="primary"
+            :disabled="!canPasskey"
+            :loading="binding"
+            @click="addPasskey"
+          >
+            <PlusOutlined />
+            添加通行密钥
+          </a-button>
+        </div>
+        <p class="wg-muted">
+          使用指纹、人脸或设备 PIN 免密登录；凭据只保存在你的设备上，不会上传到服务器。
+        </p>
+
+        <a-alert
+          v-if="!canPasskey"
+          type="info"
+          show-icon
+          :message="'当前环境不支持通行密钥'"
+          :description="'需要 HTTPS 或 localhost，且浏览器支持 WebAuthn。如果你使用 IP 访问或浏览器版本过低，将无法注册。'"
+          style="margin: 12px 0"
+        />
+
+        <a-empty
+          v-else-if="!loading && passkeys.length === 0"
+          description="尚未添加通行密钥"
+          style="padding: 32px 0"
+        >
+          <template #extra>
+            <a-button type="primary" @click="addPasskey">
+              <PlusOutlined />
+              立即添加
+            </a-button>
+          </template>
+        </a-empty>
+        <a-list v-else-if="passkeys.length > 0" :data-source="passkeys" item-layout="horizontal" size="small">
+          <template #renderItem="{ item }">
+            <a-list-item class="wg-passkey-item">
+              <a-list-item-meta :title="(item as WebAuthnCredential).name">
+                <template #description>
+                  <span class="wg-muted">
+                    添加于 {{ formatTime((item as WebAuthnCredential).created_at) }}
+                    <template v-if="(item as WebAuthnCredential).last_used_at">
+                      · 最近使用 {{ formatTime((item as WebAuthnCredential).last_used_at) }}
+                    </template>
+                  </span>
+                </template>
+              </a-list-item-meta>
+              <template #actions>
+                <a-button
+                  size="small"
+                  danger
+                  type="text"
+                  @click="removePasskey(item as WebAuthnCredential)"
+                >
+                  <DeleteOutlined />
+                  删除
+                </a-button>
+              </template>
+            </a-list-item>
+          </template>
+        </a-list>
+      </section>
+
+      <a-divider />
+
+      <!-- 第三方账号 -->
+      <section class="wg-section-block">
+        <h3 class="wg-section-title"><GithubOutlined /> 第三方账号</h3>
+        <p class="wg-muted">绑定后可使用第三方账号快捷登录本系统。</p>
+
+        <div class="wg-bind-list">
+          <div class="wg-bind-card">
+            <div class="wg-bind-main">
+              <div class="wg-bind-name">
+                <GithubOutlined />
+                GitHub
+                <a-tag v-if="githubBound" color="green" size="small">已绑定</a-tag>
+                <a-tag v-else color="default" size="small">未绑定</a-tag>
+              </div>
+              <div class="wg-muted">
+                <template v-if="githubBound">
+                  {{ githubBound.display_name || githubBound.provider_uid }}
+                </template>
+                <template v-else-if="data?.github_enabled !== true">
+                  <InfoCircleOutlined /> 管理员未开启 GitHub OAuth 登录
+                </template>
+                <template v-else>点击右侧按钮绑定 GitHub 账号</template>
+              </div>
+            </div>
+            <a-space>
+              <a-button
+                v-if="!githubBound"
+                type="primary"
+                size="small"
+                :disabled="data?.github_enabled !== true"
+                :title="data?.github_enabled !== true ? '服务端未配置 GitHub OAuth' : ''"
+                @click="bindGithub"
+              >
+                <GithubOutlined />
+                绑定
+              </a-button>
+              <a-button v-else size="small" danger @click="unbindIdentity(githubBound)">
+                <DisconnectOutlined />
+                解除
+              </a-button>
+            </a-space>
+          </div>
+        </div>
+      </section>
     </a-card>
 
     <a-modal
@@ -265,9 +384,31 @@ onMounted(load)
 </template>
 
 <style scoped>
-.wg-section {
-  font-size: 15px;
-  margin: 8px 0 4px;
+.wg-page {
+  padding: 24px;
+}
+
+.wg-account-card :deep(.ant-card-head-title) {
+  font-weight: 600;
+}
+
+.wg-section-block {
+  margin-bottom: 4px;
+}
+
+.wg-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.wg-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -275,8 +416,101 @@ onMounted(load)
 
 .wg-muted {
   color: rgba(0, 0, 0, 0.45);
+  margin: 4px 0 0;
 }
 
+/* 账号信息 */
+.wg-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.wg-info-item {
+  background: #fafafa;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.wg-info-label {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wg-info-value {
+  font-size: 15px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  word-break: break-all;
+}
+
+.wg-copy-btn {
+  padding: 0 4px;
+  height: auto;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.wg-copy-btn:hover {
+  color: #1677ff;
+}
+
+/* 安全状态 */
+.wg-security-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.wg-security-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+  background: #fff;
+  transition: all 0.2s;
+}
+
+.wg-security-item.is-active {
+  border-color: #b7eb8f;
+  background: #f6ffed;
+}
+
+.wg-security-icon {
+  font-size: 22px;
+  color: rgba(0, 0, 0, 0.25);
+}
+
+.wg-security-item.is-active .wg-security-icon {
+  color: #52c41a;
+}
+
+.wg-security-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.wg-security-status {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+/* 通行密钥 */
+.wg-passkey-item :deep(.ant-list-item-action) {
+  margin-inline-start: 24px;
+}
+
+/* 第三方绑定 */
 .wg-bind-list {
   display: flex;
   flex-direction: column;
@@ -289,16 +523,35 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 16px;
+  padding: 14px 16px;
   border: 1px solid #f0f0f0;
   border-radius: 10px;
+}
+
+.wg-bind-main {
+  min-width: 0;
 }
 
 .wg-bind-name {
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 640px) {
+  .wg-page {
+    padding: 12px;
+  }
+
+  .wg-info-grid,
+  .wg-security-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wg-bind-card {
+    flex-wrap: wrap;
+  }
 }
 </style>
