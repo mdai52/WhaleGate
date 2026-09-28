@@ -122,15 +122,15 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 
 	now := time.Now()
 	values := map[string]string{
-		model.SettingSelfUseMode:     strconv.FormatBool(in.SelfUseMode),
-		model.SettingSkillsEnabled:   strconv.FormatBool(in.SkillsEnabled),
-		model.SettingMCPEnabled:      strconv.FormatBool(in.MCPEnabled),
-		model.SettingMCPMaxRounds:    strconv.Itoa(in.MCPMaxRounds),
-		model.SettingTLSEnabled:      strconv.FormatBool(enabled),
-		model.SettingTLSCert:         cert,
-		model.SettingTLSKey:          key,
-		model.SettingPasskeyEnabled:  strconv.FormatBool(in.PasskeyEnabled),
-		model.SettingPasskeyRPID:     strings.TrimSpace(in.PasskeyRPID),
+		model.SettingSelfUseMode:      strconv.FormatBool(in.SelfUseMode),
+		model.SettingSkillsEnabled:    strconv.FormatBool(in.SkillsEnabled),
+		model.SettingMCPEnabled:       strconv.FormatBool(in.MCPEnabled),
+		model.SettingMCPMaxRounds:     strconv.Itoa(in.MCPMaxRounds),
+		model.SettingTLSEnabled:       strconv.FormatBool(enabled),
+		model.SettingTLSCert:          cert,
+		model.SettingTLSKey:           key,
+		model.SettingPasskeyEnabled:   strconv.FormatBool(in.PasskeyEnabled),
+		model.SettingPasskeyRPID:      strings.TrimSpace(in.PasskeyRPID),
 		model.SettingPasskeyRPOrigins: strings.TrimSpace(in.PasskeyRPOrigins),
 	}
 	for k, v := range values {
