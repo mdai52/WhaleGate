@@ -172,6 +172,28 @@ export interface CreateKeyResult extends APIKeyItem {
   key: string
 }
 
+export interface UpdateKeyPayload {
+  name?: string
+  /** 分组标签，可清空 */
+  group_tag?: string
+  /** 每分钟请求上限，<=0 表示继承全局默认 */
+  qpm?: number
+  /** 并发上限，<=0 表示继承全局默认 */
+  concurrency?: number
+  /** 1 启用 / 2 禁用；不传则不修改状态 */
+  status?: number
+  /** 密钥级额度上限（点），0=不限 */
+  quota_limit?: number
+  /** 有效期天数；不传表示保持不变；<=0 表示清除（永不过期）；>0 表示设为 N 天 */
+  expires_in_days?: number | null
+  /** IP 白名单（IP 或 CIDR），空=不限制 */
+  ip_whitelist?: string[]
+  /** 模型白名单，空=不限制 */
+  allowed_models?: string[]
+  /** 清零该密钥已消耗点数 */
+  reset_usage?: boolean
+}
+
 export interface Paged<T> {
   items: T[]
   total: number

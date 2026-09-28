@@ -110,6 +110,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 		{
 			keyGroup.POST("", keys.Create)
 			keyGroup.GET("", keys.List)
+			keyGroup.PUT("/:id", keys.Update)
 			keyGroup.POST("/:id/revoke", keys.Revoke)
 			keyGroup.DELETE("/:id", keys.Delete)
 		}

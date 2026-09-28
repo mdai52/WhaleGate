@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -319,6 +320,106 @@ func (c *Container) DeleteAPIKey(ctx context.Context, userID uint, id uint) erro
 		return apierr.New(apierr.ErrNotFound, "密钥不存在")
 	}
 	return nil
+}
+
+// UpdateKeyInput 更新密钥的入参。除 ExpiresInDays 外，所有字段均直接覆盖原值，
+// 因此编辑表单应将当前值回填后再提交。
+type UpdateKeyInput struct {
+	// Name 名称，空字符串表示不修改。
+	Name string `json:"name"`
+	// GroupTag 分组标签，可清空。
+	GroupTag string `json:"group_tag"`
+	// QPM 每分钟请求上限，<=0 表示继承全局默认。
+	QPM int `json:"qpm"`
+	// Concurrency 并发上限，<=0 表示继承全局默认。
+	Concurrency int `json:"concurrency"`
+	// Status 仅当为 1 或 2 时生效（1 启用 / 2 禁用）；0=不修改。
+	Status int `json:"status"`
+	// QuotaLimit 密钥级额度上限（点），0=不限；负数按 0 处理。
+	QuotaLimit int64 `json:"quota_limit"`
+	// ExpiresInDays 指针：nil=保持不变；<=0=清除过期时间（永不过期）；>0=设置为 N 天后。
+	ExpiresInDays *int `json:"expires_in_days"`
+	// IPWhitelist IP 白名单（IP 或 CIDR），空=不限制。
+	IPWhitelist []string `json:"ip_whitelist"`
+	// AllowedModels 模型白名单，空=不限制。
+	AllowedModels []string `json:"allowed_models"`
+	// ResetUsage 为 true 时清零该密钥已消耗点数（不影响历史调用记录）。
+	ResetUsage bool `json:"reset_usage"`
+}
+
+// UpdateAPIKey 更新密钥配置。userID>0 时限定只修改自己的密钥；管理员传 0 可修改任意密钥。
+func (c *Container) UpdateAPIKey(ctx context.Context, userID, id uint, in UpdateKeyInput) (*model.APIKey, error) {
+	q := c.DB.WithContext(ctx).Where("id = ?", id)
+	if userID > 0 {
+		q = q.Where("user_id = ?", userID)
+	}
+	var key model.APIKey
+	if err := q.First(&key).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apierr.New(apierr.ErrNotFound, "密钥不存在")
+		}
+		return nil, apierr.Wrap(apierr.ErrDatabase, err)
+	}
+
+	if name := strings.TrimSpace(in.Name); name != "" {
+		if len(name) > 64 {
+			return nil, apierr.New(apierr.ErrInvalidParam, "名称长度不能超过 64 字符")
+		}
+		key.Name = name
+	}
+	key.GroupTag = strings.TrimSpace(in.GroupTag)
+	key.QPM = in.QPM
+	key.Concurrency = in.Concurrency
+	if in.Status == constant.StatusEnabled || in.Status == constant.StatusDisabled {
+		key.Status = in.Status
+	}
+	if in.QuotaLimit < 0 {
+		in.QuotaLimit = 0
+	}
+	key.QuotaLimit = in.QuotaLimit
+
+	if in.ExpiresInDays != nil {
+		if *in.ExpiresInDays <= 0 {
+			key.ExpiresAt = nil
+		} else {
+			exp := time.Now().AddDate(0, 0, *in.ExpiresInDays)
+			key.ExpiresAt = &exp
+		}
+	}
+
+	// IP 白名单格式校验
+	for _, item := range in.IPWhitelist {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			if _, _, err := net.ParseCIDR(item); err != nil {
+				return nil, apierr.New(apierr.ErrInvalidParam, "IP 白名单格式错误: "+item)
+			}
+			continue
+		}
+		if net.ParseIP(item) == nil {
+			return nil, apierr.New(apierr.ErrInvalidParam, "IP 白名单格式错误: "+item)
+		}
+	}
+
+	if err := setJSONList(&key.IPWhitelist, in.IPWhitelist); err != nil {
+		return nil, apierr.Wrap(apierr.ErrInvalidParam, err)
+	}
+	if err := setJSONList(&key.AllowedModels, in.AllowedModels); err != nil {
+		return nil, apierr.Wrap(apierr.ErrInvalidParam, err)
+	}
+	if in.ResetUsage {
+		key.UsedPoints = 0
+	}
+
+	if err := c.DB.WithContext(ctx).Save(&key).Error; err != nil {
+		return nil, apierr.Wrap(apierr.ErrDatabase, err)
+	}
+	// 刷新缓存，让新配置立即生效
+	c.warmKeyCache(context.Background(), &key)
+	return &key, nil
 }
 
 // ResolveAPIKey 解析明文密钥：进程内缓存 -> Redis -> 数据库。

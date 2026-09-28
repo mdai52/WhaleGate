@@ -1,5 +1,5 @@
 import { request } from './http'
-import type { APIKeyItem, CreateKeyPayload, CreateKeyResult, Paged } from './types'
+import type { APIKeyItem, CreateKeyPayload, CreateKeyResult, Paged, UpdateKeyPayload } from './types'
 
 export const apiKeyApi = {
   list(params: { page?: number; page_size?: number; user_id?: number } = {}) {
@@ -7,6 +7,9 @@ export const apiKeyApi = {
   },
   create(payload: CreateKeyPayload) {
     return request<CreateKeyResult>({ url: '/keys', method: 'POST', data: payload })
+  },
+  update(id: number, payload: UpdateKeyPayload) {
+    return request<APIKeyItem>({ url: `/keys/${id}`, method: 'PUT', data: payload })
   },
   revoke(id: number) {
     return request<{ id: number; revoked: boolean }>({ url: `/keys/${id}/revoke`, method: 'POST' })

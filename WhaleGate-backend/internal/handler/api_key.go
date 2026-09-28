@@ -117,3 +117,28 @@ func (h *APIKeyHandler) Delete(c *gin.Context) {
 	auditOK(h.svc, c, model.AuditKeyDelete, "api_key", c.Param("id"), "")
 	response.OK(c, gin.H{"id": id, "deleted": true})
 }
+
+// Update 更新密钥配置（名称、速率、额度、IP/模型白名单、有效期、状态等）。
+func (h *APIKeyHandler) Update(c *gin.Context) {
+	id, ok := keyID(c)
+	if !ok {
+		return
+	}
+	var in service.UpdateKeyInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		response.Fail(c, bindError(err))
+		return
+	}
+	userID := CurrentUserID(c)
+	if IsAdmin(c) {
+		userID = 0
+	}
+	key, err := h.svc.UpdateAPIKey(c.Request.Context(), userID, id, in)
+	if err != nil {
+		auditFail(h.svc, c, model.AuditKeyUpdate, "api_key", c.Param("id"), err.Error())
+		response.Fail(c, err)
+		return
+	}
+	auditOK(h.svc, c, model.AuditKeyUpdate, "api_key", c.Param("id"), key.Name)
+	response.OK(c, key)
+}

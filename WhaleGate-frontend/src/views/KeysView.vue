@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { CopyOutlined, DeleteOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, DeleteOutlined, PlusOutlined, SettingOutlined, StopOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { apiKeyApi } from '@/api/apikey'
 import { channelApi } from '@/api/channel'
 import { useUserStore } from '@/stores/user'
-import type { APIKeyItem, CreateKeyPayload } from '@/api/types'
+import type { APIKeyItem, CreateKeyPayload, UpdateKeyPayload } from '@/api/types'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -91,6 +91,7 @@ const columns = [
   { title: '最近使用', dataIndex: 'last_used_at', key: 'last_used_at' },
   { title: '累计请求', dataIndex: 'request_count', key: 'request_count' },
   { title: '累计 Token', dataIndex: 'total_tokens', key: 'total_tokens' },
+  { title: '限制', key: 'limits', width: 160 },
   { title: '操作', key: 'action', fixed: 'right' as const },
 ]
 
@@ -199,6 +200,103 @@ function statusText(record: APIKeyItem) {
   return record.status === 1 ? { text: '正常', color: 'green' } : { text: '已禁用', color: 'default' }
 }
 
+// ---------------------------------------------------------------- 编辑配置
+const editOpen = ref(false)
+const editing = ref(false)
+const editTarget = ref<APIKeyItem | null>(null)
+const editForm = reactive({
+  name: '',
+  status: 1 as number,
+  group_tag: '',
+  qpm: 0,
+  concurrency: 0,
+  expiryMode: 'keep' as 'keep' | 'set' | 'clear',
+  expires_in_days: 30,
+  ip_whitelist: '',
+  quota_limit: 0,
+  allowed_models: [] as string[],
+  reset_usage: false,
+})
+
+/** 解析后端返回的 JSON 字符串列表（ip_whitelist / allowed_models）。 */
+function parseJSONList(v?: string | null): string[] {
+  if (!v) return []
+  try {
+    const arr = JSON.parse(v)
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+/** 限制信息摘要，用于表格展示。 */
+function limitSummary(record: APIKeyItem): string[] {
+  const tags: string[] = []
+  if (record.qpm || record.concurrency) tags.push('速率')
+  if (record.quota_limit) tags.push('额度')
+  if (record.ip_whitelist && parseJSONList(record.ip_whitelist).length) tags.push('IP')
+  if (record.allowed_models && parseJSONList(record.allowed_models).length) tags.push('模型')
+  if (record.expires_at) tags.push('有效期')
+  return tags
+}
+
+function openEdit(record: APIKeyItem) {
+  editTarget.value = record
+  editForm.name = record.name
+  editForm.status = record.status === 2 ? 2 : 1
+  editForm.group_tag = record.group_tag || ''
+  editForm.qpm = record.qpm || 0
+  editForm.concurrency = record.concurrency || 0
+  editForm.expiryMode = record.expires_at ? 'set' : 'keep'
+  editForm.expires_in_days = 30
+  editForm.ip_whitelist = parseJSONList(record.ip_whitelist).join('\n')
+  editForm.quota_limit = record.quota_limit || 0
+  editForm.allowed_models = parseJSONList(record.allowed_models)
+  editForm.reset_usage = false
+  editOpen.value = true
+}
+
+function buildUpdatePayload(): UpdateKeyPayload {
+  const payload: UpdateKeyPayload = {
+    name: editForm.name.trim() || '默认密钥',
+    group_tag: editForm.group_tag.trim(),
+    status: editForm.status,
+    qpm: editForm.qpm,
+    concurrency: editForm.concurrency,
+    quota_limit: editForm.quota_limit,
+    reset_usage: editForm.reset_usage,
+  }
+  if (editForm.expiryMode === 'set') {
+    payload.expires_in_days = editForm.expires_in_days
+  } else if (editForm.expiryMode === 'clear') {
+    payload.expires_in_days = 0
+  }
+  const ips = editForm.ip_whitelist
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  payload.ip_whitelist = ips
+  payload.allowed_models = editForm.allowed_models
+  return payload
+}
+
+async function submitEdit() {
+  if (!editTarget.value) return
+  if (editForm.expiryMode === 'set' && (!editForm.expires_in_days || editForm.expires_in_days < 1)) {
+    message.error('有效期需为大于 0 的天数')
+    return
+  }
+  editing.value = true
+  try {
+    await apiKeyApi.update(editTarget.value.id, buildUpdatePayload())
+    message.success('配置已更新')
+    editOpen.value = false
+    await load()
+  } finally {
+    editing.value = false
+  }
+}
+
 function formatTime(value?: string | null) {
   return value ? new Date(value).toLocaleString('zh-CN') : '—'
 }
@@ -292,8 +390,18 @@ onMounted(load)
           <template v-else-if="column.key === 'total_tokens'">
             {{ formatNumber((record as APIKeyItem).total_tokens || 0) }}
           </template>
+          <template v-else-if="column.key === 'limits'">
+            <a-space :size="[0, 4]" wrap>
+              <a-tag v-for="t in limitSummary(record as APIKeyItem)" :key="t" color="blue" style="margin: 0">{{ t }}</a-tag>
+              <span v-if="!limitSummary(record as APIKeyItem).length" class="wg-muted">无</span>
+            </a-space>
+          </template>
           <template v-else-if="column.key === 'action'">
             <a-space>
+              <a-button size="small" :disabled="!!(record as APIKeyItem).revoked_at" @click="openEdit(record as APIKeyItem)">
+                <SettingOutlined />
+                配置
+              </a-button>
               <a-button danger size="small" :disabled="!!(record as APIKeyItem).revoked_at" @click="revoke(record as APIKeyItem)">
                 <StopOutlined />
                 吊销
@@ -431,6 +539,115 @@ onMounted(load)
         </a-result>
       </template>
     </a-modal>
+
+    <a-drawer
+      v-model:open="editOpen"
+      title="密钥配置"
+      width="520"
+      :footer="null"
+    >
+      <a-form v-if="editTarget" layout="vertical">
+        <a-alert
+          v-if="editTarget.revoked_at"
+          type="warning"
+          show-icon
+          message="该密钥已吊销"
+          description="吊销后的密钥无法调用，可删除后重新创建。"
+          style="margin-bottom: 16px"
+        />
+
+        <a-form-item label="名称">
+          <a-input v-model:value="editForm.name" placeholder="例如：生产环境-后端服务" allow-clear />
+        </a-form-item>
+
+        <a-form-item label="状态">
+          <a-radio-group v-model:value="editForm.status">
+            <a-radio :value="1">启用</a-radio>
+            <a-radio :value="2">禁用</a-radio>
+          </a-radio-group>
+          <div class="wg-muted" style="font-size: 12px; margin-top: 4px">
+            禁用后该密钥立即失效，但不影响历史用量记录。
+          </div>
+        </a-form-item>
+
+        <a-form-item label="分组">
+          <a-input v-model:value="editForm.group_tag" placeholder="选填，例如：生产 / 测试" allow-clear />
+        </a-form-item>
+
+        <a-divider orientation="left">速率与额度</a-divider>
+
+        <a-row :gutter="12">
+          <a-col :span="12">
+            <a-form-item label="QPM（每分钟请求上限）">
+              <a-input-number v-model:value="editForm.qpm" :min="0" style="width: 100%" placeholder="0 = 默认" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item label="并发上限">
+              <a-input-number v-model:value="editForm.concurrency" :min="0" style="width: 100%" placeholder="0 = 默认" />
+            </a-form-item>
+          </a-col>
+        </a-row>
+
+        <a-form-item label="额度上限（点）">
+          <a-input-number
+            v-model:value="editForm.quota_limit"
+            :min="0"
+            style="width: 100%"
+            addon-before="点数"
+            placeholder="0 = 不限制"
+          />
+          <div class="wg-muted" style="font-size: 12px; margin-top: 4px">
+            该密钥可消耗的最大点数（1 元 = 1000 点）。当前已用：
+            {{ formatNumber((editTarget.used_points as number) || 0) }} /
+            {{ editTarget.quota_limit ? formatNumber(editTarget.quota_limit) : '不限' }}。
+            <a-checkbox v-model:checked="editForm.reset_usage" style="margin-top: 4px">
+              清零已消耗点数
+            </a-checkbox>
+          </div>
+        </a-form-item>
+
+        <a-divider orientation="left">限制范围</a-divider>
+
+        <a-form-item label="有效期">
+          <a-radio-group v-model:value="editForm.expiryMode">
+            <a-radio value="keep">保持不变</a-radio>
+            <a-radio value="set">设置天数</a-radio>
+            <a-radio value="clear">清除（永不过期）</a-radio>
+          </a-radio-group>
+          <a-input-number
+            v-if="editForm.expiryMode === 'set'"
+            v-model:value="editForm.expires_in_days"
+            :min="1"
+            :max="3650"
+            style="width: 100%; margin-top: 8px"
+            addon-before="天"
+          />
+        </a-form-item>
+
+        <a-form-item label="IP 白名单">
+          <a-textarea
+            v-model:value="editForm.ip_whitelist"
+            :rows="3"
+            placeholder="每行一个，支持单个 IP（10.0.0.1）或网段（10.0.0.0/8）；留空 = 不限制"
+          />
+        </a-form-item>
+
+        <a-form-item label="模型白名单">
+          <a-select
+            v-model:value="editForm.allowed_models"
+            mode="tags"
+            show-search
+            :options="modelOptions.map((m) => ({ value: m }))"
+            :loading="catalogLoading"
+            placeholder="选择或输入该密钥可调用的模型；留空 = 不限制"
+            style="width: 100%"
+          />
+        </a-form-item>
+
+        <a-button type="primary" block :loading="editing" @click="submitEdit">保存配置</a-button>
+      </a-form>
+    </a-drawer>
   </div>
 </template>
 

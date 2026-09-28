@@ -15,6 +15,7 @@ const (
 	AuditLogout           = "logout"
 	AuditChangePassword   = "change_password"
 	AuditKeyCreate        = "key.create"
+	AuditKeyUpdate        = "key.update"
 	AuditKeyRevoke        = "key.revoke"
 	AuditKeyDelete        = "key.delete"
 	AuditChannelCreate    = "channel.create"
