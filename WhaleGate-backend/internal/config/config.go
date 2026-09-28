@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -106,6 +107,19 @@ type ServerConfig struct {
 	IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 	BodyLimit       string        `mapstructure:"body_limit"`
+	// TLS 传输层加密（HTTPS）配置；启用后服务以 HTTPS 监听。
+	TLS TLSConfig `mapstructure:"tls"`
+}
+
+// TLSConfig HTTPS 传输层加密配置。启用 Enabled 后，所有入站流量（含 API Key、
+// 令牌、请求体）均经 TLS 加密，可有效防止外部抓包渗透。
+type TLSConfig struct {
+	// Enabled 是否启用 HTTPS；为 false 时以明文 HTTP 监听。
+	Enabled bool `mapstructure:"enabled"`
+	// CertFile 证书文件路径（PEM 格式）。
+	CertFile string `mapstructure:"cert_file"`
+	// KeyFile 私钥文件路径（PEM 格式）。
+	KeyFile string `mapstructure:"key_file"`
 }
 
 // LogFileConfig 日志文件滚动配置。
@@ -363,6 +377,17 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Security.EncryptionKey) != 32 {
 		return fmt.Errorf("security.encryption_key 必须为 32 字节，当前 %d", len(c.Security.EncryptionKey))
+	}
+	if c.Server.TLS.Enabled {
+		if c.Server.TLS.CertFile == "" || c.Server.TLS.KeyFile == "" {
+			return errors.New("server.tls.enabled 为 true 时必须同时提供 cert_file 与 key_file")
+		}
+		if _, err := os.Stat(c.Server.TLS.CertFile); err != nil {
+			return fmt.Errorf("server.tls.cert_file 不可读: %w", err)
+		}
+		if _, err := os.Stat(c.Server.TLS.KeyFile); err != nil {
+			return fmt.Errorf("server.tls.key_file 不可读: %w", err)
+		}
 	}
 	return nil
 }

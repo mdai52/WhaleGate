@@ -3,7 +3,7 @@ main:
     - name: 质量检查
       stages:
         - name: 后端检查与测试
-          image: golang:1.24
+          image: golang:1.26
           script: |
             cd WhaleGate-backend
             echo "== gofmt =="
@@ -60,7 +60,7 @@ $:
     - name: 变更检查
       stages:
         - name: 后端测试
-          image: golang:1.23
+          image: golang:1.26
           script: |
             cd WhaleGate-backend
             go vet ./...

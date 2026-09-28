@@ -11,6 +11,13 @@ server:
   idle_timeout: 120s
   shutdown_timeout: 15s
   body_limit: 32MB
+  # 传输层加密（HTTPS）。启用后所有入站流量（API Key、令牌、请求体）均经 TLS 加密，
+  # 可防止外部抓包渗透。生产环境建议前置反代（如 Nginx/CNB 网关）终止 TLS，此处亦可直出。
+  # cert_file / key_file 为 PEM 格式文件路径，需可读。
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
 
 log:
   level: info # debug | info | warn | error

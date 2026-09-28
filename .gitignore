@@ -16,6 +16,9 @@
 .env
 .env.local
 .Trash-0/
+# 本地自签名 TLS 证书（仅用于本地 HTTPS 测试，勿入库）
+WhaleGate-backend/configs/tls.crt
+WhaleGate-backend/configs/tls.key
 # 本地端到端验证脚本（依赖本地 mock 上游，不入库）
 /scripts/
 WhaleGate-backend/configs/config.yaml

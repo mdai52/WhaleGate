@@ -56,6 +56,14 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 
+	// 启用 HTTPS 时强制下发安全响应头与 HSTS，避免降级到明文被中间人劫持。
+	if cfg.Server.TLS.Enabled {
+		cfg.Security.SecureHeaders = true
+		if cfg.Security.HSTSMaxAge <= 0 {
+			cfg.Security.HSTSMaxAge = 31536000
+		}
+	}
+
 	lg, err := logger.New(cfg.Log)
 	if err != nil {
 		return nil, err
@@ -177,7 +185,21 @@ func (a *App) Run(stop <-chan struct{}) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		a.Logger.Info("鲸闸服务启动", zap.String("addr", a.Server.Addr), zap.String("mode", a.Config.Server.Mode))
+		if a.Config.Server.TLS.Enabled {
+			tls := a.Config.Server.TLS
+			a.Logger.Info("鲸闸服务启动",
+				zap.String("addr", a.Server.Addr),
+				zap.String("mode", a.Config.Server.Mode),
+				zap.Bool("tls", true))
+			if err := a.Server.ListenAndServeTLS(tls.CertFile, tls.KeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("HTTPS 服务异常退出: %w", err)
+			}
+			return
+		}
+		a.Logger.Info("鲸闸服务启动",
+			zap.String("addr", a.Server.Addr),
+			zap.String("mode", a.Config.Server.Mode),
+			zap.Bool("tls", false))
 		if err := a.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("HTTP 服务异常退出: %w", err)
 		}
