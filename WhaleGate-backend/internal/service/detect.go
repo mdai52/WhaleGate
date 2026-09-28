@@ -18,10 +18,12 @@ import (
 type DetectInput struct {
 	// BaseURL 上游 API 地址，例如 https://api.openai.com/v1。
 	BaseURL string `json:"base_url"`
-	// APIKey 上游密钥明文。
+	// APIKey 上游密钥明文；为空且提供了 ChannelID 时，自动使用渠道已保存的密钥。
 	APIKey string `json:"api_key"`
 	// Type 可选协议提示，为空时自动按顺序试探。
 	Type string `json:"type"`
+	// ChannelID 渠道 ID，编辑态未重新输入密钥时用于读取已保存密钥。
+	ChannelID uint `json:"channel_id,omitempty"`
 }
 
 // DetectResult 自动探测结果：可直接用于填充渠道表单。
@@ -64,7 +66,21 @@ func (c *Container) DetectChannel(ctx context.Context, in DetectInput) (*DetectR
 		return nil, apierr.New(apierr.ErrInvalidParam, "请先填写上游 API 地址")
 	}
 	if in.APIKey == "" {
-		return nil, apierr.New(apierr.ErrInvalidParam, "请先填写上游密钥")
+		if in.ChannelID == 0 {
+			return nil, apierr.New(apierr.ErrInvalidParam, "请先填写上游密钥")
+		}
+		ch, err := c.GetChannel(ctx, in.ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		key, err := c.DecryptChannelKey(ch)
+		if err != nil {
+			return nil, err
+		}
+		if key == "" {
+			return nil, apierr.New(apierr.ErrInvalidParam, "该渠道未保存上游密钥，请先填写")
+		}
+		in.APIKey = key
 	}
 
 	probe, err := gateway.ProbeUpstream(ctx, in.BaseURL, in.APIKey, in.Type)

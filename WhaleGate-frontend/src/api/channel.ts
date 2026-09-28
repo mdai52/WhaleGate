@@ -23,8 +23,9 @@ export const channelApi = {
   remove(id: number) {
     return request<{ id: number; deleted: boolean }>({ url: `/admin/channels/${id}`, method: 'DELETE' })
   },
-  /** 自动探测：只需上游地址与密钥，自动识别协议与模型列表 */
-  detect(payload: { base_url: string; api_key: string; type?: string }) {
+  /** 自动探测：只需上游地址与密钥，自动识别协议与模型列表。
+   * 编辑态可只传 channel_id，后端会读取该渠道已保存的密钥。 */
+  detect(payload: { base_url: string; api_key: string; type?: string; channel_id?: number }) {
     return request<DetectResult>({ url: '/admin/channels/detect', method: 'POST', data: payload })
   },
   /** 全局模型目录：探测发现过的模型，供下拉选择 */

@@ -65,7 +65,9 @@ async function runDetect() {
     message.warning('请先填写上游地址')
     return
   }
-  if (!form.api_key) {
+  // 编辑态且未重新输入密钥时，传 channel_id 让后端用已保存密钥探测
+  const channelId = isEdit.value && editingId.value && !form.api_key ? editingId.value : undefined
+  if (!form.api_key && !channelId) {
     message.warning('请先填写上游密钥')
     return
   }
@@ -73,8 +75,9 @@ async function runDetect() {
   try {
     const res = await channelApi.detect({
       base_url: form.base_url.trim(),
-      api_key: form.api_key,
+      api_key: form.api_key ?? '',
       type: form.type,
+      channel_id: channelId,
     })
     detectResult.value = res
     detectedModels.value = res.models
