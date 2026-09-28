@@ -55,8 +55,8 @@ func handleToUserID(handle []byte) uint {
 func (c *Container) PasskeyConfig() gin.H {
 	enabled, rpID, _, origins := c.passkeyConfig()
 	return gin.H{
-		"enabled": enabled,
-		"rp_id":  rpID,
+		"enabled":    enabled,
+		"rp_id":      rpID,
 		"rp_origins": origins,
 	}
 }
