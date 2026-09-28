@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"syscall"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
