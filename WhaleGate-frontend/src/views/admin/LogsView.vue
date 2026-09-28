@@ -24,7 +24,9 @@ const columns = [
   { title: '模型', dataIndex: 'model', key: 'model' },
   { title: '上游模型', dataIndex: 'upstream_model', key: 'upstream_model' },
   { title: '渠道', dataIndex: 'channel_name', key: 'channel_name' },
-  { title: 'Token', key: 'tokens', width: 160 },
+  { title: '客户端 IP', dataIndex: 'client_ip', key: 'client_ip', width: 130 },
+  { title: '协议', key: 'scheme', width: 90 },
+  { title: 'Token', key: 'tokens', width: 180 },
   { title: '点数', dataIndex: 'points', key: 'points', width: 80 },
   { title: '耗时', dataIndex: 'latency_ms', key: 'latency_ms', width: 90 },
   { title: '状态', dataIndex: 'status', key: 'status', width: 90 },
@@ -174,10 +176,18 @@ load()
           <template v-if="column.key === 'created_at'">
             {{ formatTime((record as CallLog).created_at) }}
           </template>
+          <template v-else-if="column.key === 'scheme'">
+            <a-tag :color="(record as CallLog).request_scheme === 'https' ? 'green' : 'blue'">
+              {{ (record as CallLog).request_scheme?.toUpperCase() || '—' }}
+            </a-tag>
+          </template>
           <template v-else-if="column.key === 'tokens'">
-            <span class="wg-muted">P</span> {{ (record as CallLog).prompt_tokens }}
-            <span class="wg-muted">/ C</span> {{ (record as CallLog).completion_tokens }}
-            <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple">
+            <div>
+              输入 {{ (record as CallLog).prompt_tokens }}
+              <span class="wg-muted">/</span>
+              输出 {{ (record as CallLog).completion_tokens }}
+            </div>
+            <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple" size="small">
               思维链 {{ (record as CallLog).reasoning_tokens }}
             </a-tag>
           </template>

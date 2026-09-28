@@ -205,9 +205,9 @@ func (h *AdminHandler) ExportLogs(c *gin.Context) {
 	// BOM 让 Excel 正确识别 UTF-8
 	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
 	_ = writer.Write([]string{
-		"时间", "用户ID", "模型", "上游模型", "协议", "渠道", "状态",
+		"时间", "用户ID", "模型", "上游模型", "API协议", "请求协议", "渠道", "状态",
 		"提示Token", "完成Token", "推理Token", "合计Token", "点数",
-		"延迟(ms)", "首字(ms)", "工具轮次", "自用", "置信度", "HTTP状态", "错误信息", "TraceID",
+		"延迟(ms)", "首字(ms)", "工具轮次", "自用", "置信度", "HTTP状态", "错误信息", "TraceID", "客户端IP",
 	})
 	for i := range list {
 		e := &list[i]
@@ -217,6 +217,7 @@ func (h *AdminHandler) ExportLogs(c *gin.Context) {
 			e.Model,
 			e.UpstreamModel,
 			e.Protocol,
+			e.RequestScheme,
 			e.ChannelName,
 			callStatusText(e.Status),
 			strconv.Itoa(e.PromptTokens),
@@ -232,6 +233,7 @@ func (h *AdminHandler) ExportLogs(c *gin.Context) {
 			strconv.Itoa(e.HTTPStatus),
 			e.ErrorMessage,
 			e.TraceID,
+			e.ClientIP,
 		})
 	}
 	writer.Flush()

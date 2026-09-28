@@ -124,9 +124,12 @@ load()
             {{ formatTime((record as CallLog).created_at) }}
           </template>
           <template v-else-if="column.key === 'tokens'">
-            <span class="wg-muted">P</span> {{ (record as CallLog).prompt_tokens }}
-            <span class="wg-muted">/ C</span> {{ (record as CallLog).completion_tokens }}
-            <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple">
+            <div>
+              输入 {{ (record as CallLog).prompt_tokens }}
+              <span class="wg-muted">/</span>
+              输出 {{ (record as CallLog).completion_tokens }}
+            </div>
+            <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple" size="small">
               思维链 {{ (record as CallLog).reasoning_tokens }}
             </a-tag>
           </template>

@@ -281,7 +281,8 @@ func (h *RelayHandler) settleAndLog(
 		ErrorMessage:     truncateText(errorMessage, 500),
 		UsageConfidence:  confidence,
 		TraceID:          c.GetString(constant.CtxTraceID),
-		ClientIP:         c.ClientIP(),
+		ClientIP:         util.RealClientIP(c, h.svc.Config.Server.RealIPHeader),
+		RequestScheme:    util.RequestScheme(c),
 		CreatedAt:        time.Now(),
 	}
 	if channel != nil {

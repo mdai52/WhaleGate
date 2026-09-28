@@ -18,6 +18,15 @@ server:
     enabled: false
     cert_file: ""
     key_file: ""
+  # 可信代理 CIDR。部署在 Nginx/Traefik 等反代后时填写代理网段，
+  # 日志中的「客户端 IP」才能从 X-Forwarded-For 解析到真实用户地址。
+  # trusted_proxies:
+  #   - 10.0.0.0/8
+  #   - 172.16.0.0/12
+  #   - 192.168.0.0/16
+  #   - 127.0.0.1/32
+  # 如反代通过自定义头传递真实 IP（如 X-Real-IP），可在此指定；为空则使用 gin 默认逻辑。
+  # real_ip_header: X-Forwarded-For
 
 log:
   level: info # debug | info | warn | error

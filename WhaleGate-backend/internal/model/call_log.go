@@ -27,9 +27,11 @@ type CallLog struct {
 	Model string `gorm:"size:128;index" json:"model"`
 	// UpstreamModel 经别名/映射改写后的上游模型名。
 	UpstreamModel string `gorm:"size:128" json:"upstream_model,omitempty"`
-	// Protocol 客户端协议。
+	// Protocol 客户端 API 协议（openai / gemini）。
 	Protocol string `gorm:"size:32" json:"protocol"`
-	Stream   bool   `json:"stream"`
+	// RequestScheme 客户端请求协议：http / https。
+	RequestScheme string `gorm:"size:8" json:"request_scheme,omitempty"`
+	Stream        bool   `json:"stream"`
 
 	// 计量：completion 已包含思维链（reasoning）。
 	PromptTokens     int `json:"prompt_tokens"`

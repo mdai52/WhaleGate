@@ -299,6 +299,7 @@ export interface CallLog {
   model: string
   upstream_model?: string
   protocol: string
+  request_scheme?: string
   stream: boolean
   prompt_tokens: number
   completion_tokens: number

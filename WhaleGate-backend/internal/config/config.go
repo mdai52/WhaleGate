@@ -108,6 +108,11 @@ type ServerConfig struct {
 	BodyLimit       string        `mapstructure:"body_limit"`
 	// TLS 传输层加密（HTTPS）配置；启用后服务以 HTTPS 监听。
 	TLS TLSConfig `mapstructure:"tls"`
+	// TrustedProxies 可信代理 CIDR 列表。为空时不信任任何代理，真实 IP 取 RemoteAddr；
+	// 部署在反向代理后时填写代理网段，才能从 X-Forwarded-For 解析真实客户端 IP。
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	// RealIPHeader 显式指定真实 IP 请求头，如 X-Real-IP；为空则使用 gin 默认逻辑。
+	RealIPHeader string `mapstructure:"real_ip_header"`
 }
 
 // TLSConfig HTTPS 传输层加密配置。启用 Enabled 后，所有入站流量（含 API Key、

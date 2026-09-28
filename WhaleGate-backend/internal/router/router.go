@@ -36,6 +36,16 @@ func NewEngine(d Deps) *gin.Engine {
 	gin.SetMode(d.Config.Server.Mode)
 	engine := gin.New()
 
+	// 配置可信代理，部署在反代后才能正确解析 X-Forwarded-For 中的真实客户端 IP。
+	if len(d.Config.Server.TrustedProxies) > 0 {
+		if err := engine.SetTrustedProxies(d.Config.Server.TrustedProxies); err != nil && d.Logger != nil {
+			d.Logger.Warn("设置可信代理失败", zap.Error(err))
+		}
+	} else {
+		// 默认不信任任何代理，防止客户端伪造 X-Forwarded-For。
+		_ = engine.SetTrustedProxies(nil)
+	}
+
 	engine.Use(middleware.RequestID())
 	engine.Use(middleware.Recovery(d.Logger))
 	engine.Use(middleware.SecurityHeaders(d.Config.Security))
