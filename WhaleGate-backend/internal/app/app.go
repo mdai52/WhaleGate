@@ -3,9 +3,12 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"syscall"
 	"sync"
 	"time"
 
@@ -56,14 +59,6 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 
-	// 启用 HTTPS 时强制下发安全响应头与 HSTS，避免降级到明文被中间人劫持。
-	if cfg.Server.TLS.Enabled {
-		cfg.Security.SecureHeaders = true
-		if cfg.Security.HSTSMaxAge <= 0 {
-			cfg.Security.HSTSMaxAge = 31536000
-		}
-	}
-
 	lg, err := logger.New(cfg.Log)
 	if err != nil {
 		return nil, err
@@ -86,6 +81,9 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	app.Service = service.New(cfg, app.DB, app.RDB, lg)
+
+	// 从「数据库优先、配置文件兜底」加载 TLS 配置，决定监听协议与安全响应头。
+	app.Service.LoadTLSSettings(context.Background())
 
 	app.Engine = router.NewEngine(router.Deps{
 		Config:  cfg,
@@ -185,13 +183,17 @@ func (a *App) Run(stop <-chan struct{}) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if a.Config.Server.TLS.Enabled {
-			tls := a.Config.Server.TLS
+		if a.Service.TLSIsEnabled() {
 			a.Logger.Info("鲸闸服务启动",
 				zap.String("addr", a.Server.Addr),
 				zap.String("mode", a.Config.Server.Mode),
 				zap.Bool("tls", true))
-			if err := a.Server.ListenAndServeTLS(tls.CertFile, tls.KeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			// 证书由 tlsProvider 动态提供，支持运行时轮换而无需重启。
+			a.Server.TLSConfig = &tls.Config{
+				GetCertificate: a.Service.GetCertificate,
+				MinVersion:     tls.VersionTLS12,
+			}
+			if err := a.Server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- fmt.Errorf("HTTPS 服务异常退出: %w", err)
 			}
 			return
@@ -210,6 +212,40 @@ func (a *App) Run(stop <-chan struct{}) error {
 		return err
 	case <-stop:
 		return a.Shutdown(context.Background())
+	case <-a.Service.RestartChan():
+		a.Logger.Info("配置变更需重启以应用 HTTPS 监听模式，正在重新执行进程")
+		if err := a.Shutdown(context.Background()); err != nil && a.Logger != nil {
+			a.Logger.Warn("重启前优雅关闭出现错误", zap.Error(err))
+		}
+		a.reloadSelf()
+		return nil
+	}
+}
+
+// reloadSelf 优雅关闭后重新执行当前二进制，使监听模式（HTTP/HTTPS）的变更生效。
+// 通过 syscall.Exec 替换进程映像，沿用同一容器/PID，避免额外停机。
+func (a *App) reloadSelf() {
+	if os.Getenv("WG_DISABLE_SELF_RESTART") == "1" {
+		if a.Logger != nil {
+			a.Logger.Warn("已通过环境变量 WG_DISABLE_SELF_RESTART 禁用自重启，请手动重启服务以应用 HTTPS 变更")
+		}
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		if a.Logger != nil {
+			a.Logger.Error("获取当前可执行文件失败，无法自重启", zap.Error(err))
+		}
+		return
+	}
+	if a.Logger != nil {
+		_ = a.Logger.Sync()
+	}
+	// #nosec G204 -- 重新执行自身二进制，参数与环境均来自可信来源
+	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+		if a.Logger != nil {
+			a.Logger.Error("自重启失败，请手动重启服务", zap.Error(err))
+		}
 	}
 }
 

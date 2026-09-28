@@ -11,12 +11,45 @@ const userStore = useUserStore()
 
 const loading = ref(false)
 const saving = ref(false)
+const tlsSaving = ref(false)
 const settings = reactive<Settings>({
   self_use_mode: false,
   skills_enabled: false,
   mcp_enabled: false,
   mcp_max_rounds: 5,
+  tls_enabled: false,
+  tls_cert: '',
+  tls_key: '',
+  tls_key_set: false,
 })
+
+// 私钥为敏感字段，仅在编辑时暂存，绝不回填展示。
+const tlsKeyInput = ref('')
+// 当前浏览器访问协议，用于直观提示。
+const currentProtocol = window.location.protocol.replace(':', '').toUpperCase()
+
+// 保存完整 HTTPS 配置（证书/私钥变更）。
+async function saveTLS(enabled: boolean, withKey = false) {
+  tlsSaving.value = true
+  const snapshot = { ...settings }
+  try {
+    const payload: Partial<Settings> = { tls_enabled: enabled, tls_cert: settings.tls_cert }
+    if (withKey) payload.tls_key = tlsKeyInput.value
+    const res = await settingsApi.update(payload)
+    Object.assign(settings, res)
+    tlsKeyInput.value = ''
+    message.success(
+      enabled
+        ? 'HTTPS 已开启，服务正在重启以生效（稍后请以 https 访问）'
+        : 'HTTPS 已关闭，服务正在重启以生效',
+    )
+  } catch {
+    Object.assign(settings, snapshot)
+    message.error('保存失败，请检查证书与私钥是否匹配')
+  } finally {
+    tlsSaving.value = false
+  }
+}
 
 const selfUseMode = computed({
   get: () => settings.self_use_mode,
@@ -54,6 +87,8 @@ async function load() {
   try {
     const res = await settingsApi.get()
     Object.assign(settings, res)
+    // 私钥属敏感字段，加载后不应回填到输入框
+    tlsKeyInput.value = ''
   } catch {
     message.error('加载设置失败')
   } finally {
@@ -188,6 +223,62 @@ onMounted(load)
           <a-button :loading="saving" @click="applyMaxRounds">保存</a-button>
         </a-space>
       </div>
+    </a-card>
+
+    <a-card title="安全访问（HTTPS）" :loading="loading" style="margin-top: 16px">
+      <template #extra>
+        <a-tag :color="settings.tls_enabled ? 'green' : 'orange'">
+          当前：{{ settings.tls_enabled ? 'HTTPS' : 'HTTP' }}（页面协议 {{ currentProtocol }}）
+        </a-tag>
+      </template>
+
+      <a-alert
+        :type="settings.tls_enabled ? 'success' : 'warning'"
+        show-icon
+        style="margin-bottom: 16px"
+        :message="settings.tls_enabled ? '已启用 HTTPS，全部流量经 TLS 加密' : '当前以明文 HTTP 提供访问，存在被抓包/中间人风险'"
+        description="启用后服务端将直接以 HTTPS 监听并下发 HSTS 安全头；切换开关会触发服务自动重启以生效。"
+      />
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">启用 HTTPS</div>
+          <div class="wg-muted">仅管理员可配置；开启后需提供证书与私钥（PEM 格式）</div>
+        </div>
+        <a-switch
+          v-model:checked="settings.tls_enabled"
+          checked-children="开"
+          un-checked-children="关"
+        />
+      </div>
+
+      <template v-if="settings.tls_enabled">
+        <a-divider style="margin: 12px 0" />
+        <a-form layout="vertical">
+          <a-form-item label="证书（Certificate，PEM）">
+            <a-textarea
+              v-model:value="settings.tls_cert"
+              :rows="5"
+              placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+            />
+          </a-form-item>
+          <a-form-item :label="settings.tls_key_set ? '私钥（Private Key，已配置，留空则保持不变）' : '私钥（Private Key，PEM）'">
+            <a-textarea
+              v-model:value="tlsKeyInput"
+              :rows="5"
+              placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+            />
+            <div class="wg-muted" style="font-size: 12px; margin-top: 4px">
+              私钥仅在保存时上传，不会回传到浏览器。换证书/私钥后点击「保存 HTTPS 配置」即可热生效。
+            </div>
+          </a-form-item>
+        </a-form>
+      </template>
+
+      <a-divider style="margin: 12px 0" />
+      <a-button type="primary" :loading="tlsSaving" @click="saveTLS(settings.tls_enabled, true)">
+        {{ settings.tls_enabled ? '保存 HTTPS 配置' : '保存（关闭 HTTPS）' }}
+      </a-button>
     </a-card>
 
     <a-card title="修改密码" style="margin-top: 16px">

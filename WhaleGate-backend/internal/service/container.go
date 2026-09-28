@@ -36,6 +36,10 @@ type Container struct {
 	// WebAuthn 通行密钥（未启用时为 nil）。
 	WebAuthn *webauthn.WebAuthn
 	scripts  *scripts
+	// tlsProvider 当前 TLS 证书与启用状态的持有者，支持运行时热替换证书。
+	tlsProvider *tlsCertProvider
+	// restartCh 当监听模式（HTTP<->HTTPS）需要变更时触发进程自重启。
+	restartCh chan struct{}
 }
 
 // New 创建服务容器。
@@ -57,6 +61,8 @@ func New(cfg *config.Config, db *gorm.DB, rdb *redis.Client, lg *zap.Logger) *Co
 	c.Logs = NewCallLogWriter(db, lg, 4096)
 	c.Audits = NewAuditWriter(db, lg, 2048)
 	c.WebAuthn = buildWebAuthn(cfg, lg)
+	c.tlsProvider = newTLSCertProvider()
+	c.restartCh = make(chan struct{}, 1)
 	return c
 }
 

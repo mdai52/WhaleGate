@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -378,17 +377,8 @@ func (c *Config) Validate() error {
 	if len(c.Security.EncryptionKey) != 32 {
 		return fmt.Errorf("security.encryption_key 必须为 32 字节，当前 %d", len(c.Security.EncryptionKey))
 	}
-	if c.Server.TLS.Enabled {
-		if c.Server.TLS.CertFile == "" || c.Server.TLS.KeyFile == "" {
-			return errors.New("server.tls.enabled 为 true 时必须同时提供 cert_file 与 key_file")
-		}
-		if _, err := os.Stat(c.Server.TLS.CertFile); err != nil {
-			return fmt.Errorf("server.tls.cert_file 不可读: %w", err)
-		}
-		if _, err := os.Stat(c.Server.TLS.KeyFile); err != nil {
-			return fmt.Errorf("server.tls.key_file 不可读: %w", err)
-		}
-	}
+	// TLS 证书/私钥既可来自配置文件，也可由管理员在后台配置并存入数据库；
+	// 实际可用性在校验证书对时（service.LoadTLSSettings）统一判定，此处不强制文件存在。
 	return nil
 }
 

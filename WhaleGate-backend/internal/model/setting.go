@@ -12,6 +12,12 @@ const (
 	SettingMCPEnabled = "mcp_enabled"
 	// SettingMCPMaxRounds 网关代执行的最大工具轮次。
 	SettingMCPMaxRounds = "mcp_max_rounds"
+	// SettingTLSEnabled 是否以 HTTPS 监听（由服务端直接提供 TLS）。
+	SettingTLSEnabled = "tls_enabled"
+	// SettingTLSCert TLS 证书（PEM，可公开）。
+	SettingTLSCert = "tls_cert"
+	// SettingTLSKey TLS 私钥（PEM，敏感，仅存储不回显）。
+	SettingTLSKey = "tls_key"
 )
 
 // AppSetting 全局运行时设置，value 存放 JSON 文本。
