@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="web/public/logo-mark.png" width="96" alt="WhaleGate logo" />
+<img src="WhaleGate-frontend/public/logo-mark.png" width="96" alt="WhaleGate logo" />
 
 # 鲸闸 WhaleGate
 
