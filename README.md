@@ -65,6 +65,12 @@ make run                  # 启动服务端（默认 :8080）
 | 调用历史 | 按模型 / 状态 / 时间范围筛选，展示 token、点数、耗时、首字延迟、计费置信度 |
 | 账号与安全 | 密码修改、Passkey / WebAuthn、GitHub 绑定 |
 
+**创意**
+
+| 页面 | 说明 |
+| --- | --- |
+| AI 绘图 | 在线文生图工作台：左侧提示词词库（10 个分类 + 关键词检索）选模板，右侧创作面板选模型 / 尺寸 / 张数生成，生成结果转存本地并沉淀到作品库 |
+
 **管理后台**（仅管理员可见）
 
 | 页面 | 说明 |
@@ -184,6 +190,7 @@ location / {
 | 协议 | 地址 |
 | --- | --- |
 | OpenAI 兼容 | `http://<host>:8080/v1/chat/completions` |
+| 文生图 | `http://<host>:8080/v1/images/generations` |
 | 模型列表 | `http://<host>:8080/v1/models` |
 | Gemini 原生 | `http://<host>:8080/v1beta/models/{model}:generateContent` |
 
@@ -323,6 +330,44 @@ docker compose logs app | grep -i password
 ```json
 { "supported": ["temperature", "top_p", "top_k", "repetition_penalty", "max_tokens", "stop", "seed"] }
 ```
+
+### AI 绘图工作台
+
+图片生成是同步一次性返回，没有流式与工具调用，因此不经过 `UnifiedRequest` / `UnifiedResponse`，
+而是独立的一对小类型 `ImageRequest` / `ImageResponse`（见 `internal/pkg/gateway/image.go`）：
+
+- **上游协议映射**：OpenAI 兼容渠道走 `POST {base}/images/generations`；
+  Gemini 原生渠道走 `generateContent` + `generationConfig.responseModalities: ["TEXT","IMAGE"]`，
+  结果从 `parts[].inlineData` 提取。Anthropic 协议不提供图片生成，选路时直接跳过。
+- **chat 接口回退**：聚合平台常把部分模型的生图能力只开在 chat 接口下
+  （如 Gemini 系模型走 `modalities: ["image","text"]`，结果在 `message.images[]`，
+  OpenRouter 风格）。原生端点返回 400/404/405/415/422 这类"端点不认该模型"的错误时，
+  自动回退到 chat 接口重试一次；鉴权、限流、服务端故障不触发回退。
+  `modalities` 已作为标准参数纳入能力表，因此 `/v1/chat/completions` 也可直接用于生图。
+- **图片转存**：上游返回的 `b64_json` 与临时 `url` 都转存到配置的存储后端，
+  上游链接通常几小时内失效，转存后作品库才能长期回看。
+- **存储可插拔**（管理员在「系统设置 → 绘图工作台存储」配置，修改后立即生效，无需重启）：
+
+  | 后端 | 适用 | 关键配置 |
+  | --- | --- | --- |
+  | 本地磁盘 | 单机部署 | 存储目录（留空则用 `studio.data_dir`）、可选公开访问前缀 |
+  | 对象存储（S3 兼容） | 多实例 / 容器化部署 | 服务地址、桶名、区域、密钥、可选对象键前缀与公开访问前缀 |
+
+  对象存储覆盖 AWS S3、Cloudflare R2、阿里云 OSS、腾讯 COS 与自建 MinIO；
+  自建 MinIO 与部分国内厂商需开启「路径风格寻址」。
+  配置了公开访问前缀时图片直连存储，否则经 `GET /api/v1/studio/works/{id}/images/{index}`
+  按登录态与归属校验后回读。
+  切换存储后**历史作品仍从原存储读取**——每件作品都记录了写入时使用的后端。
+- **词库**：`prompt_templates` 表按 10 个分类维护可直接使用的提示词模板，迁移内含种子数据。
+- **作品库**：`image_works` 记录每次生成的模型、提示词、参数、渠道、耗时与结果。
+- **接口**：工作台走用户态 `/api/v1/studio/*`；同时对外提供 OpenAI 兼容的 `/v1/images/generations`，
+  复用同一套渠道选路与重试逻辑。
+
+> 计费说明：图片生成没有 token 维度的口径，`spec.Usage` 与 `call_logs` 也都不含「张数」字段，
+> 因此本次只落调用日志，不做额度预扣/结算；按张计费待后续补充。
+> 日志由 `service.GenerateImage` 统一落，工作台与 `/v1/images/generations` 两个入口共用一份口径：
+> 成功与失败都记录**渠道与上游模型**（失败恰恰最需要这两个字段），
+> 且上游 429 / 404 / 超时分别映射为限流、模型不存在、超时错误码，而不是笼统的"上游调用失败"。
 
 ### 计量计费
 

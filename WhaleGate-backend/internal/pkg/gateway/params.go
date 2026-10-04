@@ -24,6 +24,8 @@ const (
 	ParamResponseFormat    = "response_format"
 	ParamN                 = "n"
 	ParamMinP              = "min_p"
+	// ParamModalities 输出模态声明（["image","text"]），OpenAI chat 接口的生图开关。
+	ParamModalities = "modalities"
 )
 
 // paramNameAliases 归一化映射：去掉下划线/连字符后的小写名 -> 统一名。
@@ -50,6 +52,8 @@ var paramNameAliases = map[string]string{
 	"num":                 ParamN,
 	"candidatecount":      ParamN,
 	"minp":                ParamMinP,
+	"modalities":          ParamModalities,
+	"modality":            ParamModalities,
 }
 
 // NormalizeParamName 把任意写法（topK / top-k / max_output_tokens）归一为统一参数名。
@@ -83,6 +87,8 @@ var openAIParamTargets = map[string]ParamTarget{
 	ParamN:                 {Path: []string{"n"}},
 	ParamMinP:              {Path: []string{"min_p"}},
 	ParamResponseFormat:    {Path: []string{"response_format"}},
+	// 声明输出模态后可让 chat 接口返回图片（OpenRouter 风格聚合平台的生图方式）。
+	ParamModalities: {Path: []string{"modalities"}},
 }
 
 // geminiParamTargets Gemini 原生协议的参数映射。
@@ -116,6 +122,7 @@ var defaultSupportedParams = map[string][]string{
 	ProtocolOpenAI: {
 		ParamTemperature, ParamTopP, ParamMaxTokens, ParamStop,
 		ParamFrequencyPenalty, ParamPresencePenalty, ParamSeed, ParamN, ParamResponseFormat,
+		ParamModalities,
 	},
 	ProtocolGemini: {
 		ParamTemperature, ParamTopP, ParamTopK, ParamMaxTokens, ParamStop,

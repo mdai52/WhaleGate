@@ -358,6 +358,61 @@ ALTER TABLE api_keys ADD COLUMN group_id BIGINT REFERENCES groups (id);
 
 `POST /api/v1/system/install` 仅在未初始化时可用，**避免被用于提权**。
 
+### 3.11 OAuth 凭证接入
+
+管理员在「认证文件」页通过 OAuth 绑定上游订阅账号（Claude Code、Codex、Gemini 等），
+内置供应商的 `client_id` 取自各厂商 CLI 的公开内嵌值，配置文件可覆盖。
+
+- **覆盖语义**：`oauth.providers` 中与内置 ID 相同的条目做**字段级覆盖**——
+  以内置定义打底，只替换显式填写的字段。接入自建 OAuth 客户端时只需写
+  `client_id` / `client_secret` / `redirect_uri`，不必重复抄写端点与 scopes。
+- **redirect_uri 优先级**：供应商配置 > 前端传入 > `auth.frontend_base`。
+  该地址必须与 OAuth 应用中登记的回调地址**完全一致**，否则上游直接拒绝。
+  之所以让配置优先，是因为有些供应商（Google）只接受登记过的地址，
+  而内置 `client_id` 的回调地址由厂商维护，无法登记本网关地址——
+  此时必须自建 OAuth 客户端并显式指定 `redirect_uri`。
+- **client_secret**：Google 等供应商的令牌端点强制要求；配置文件明文存放，
+  需收紧文件权限且不得入库。
+
+### 3.12 AI 绘图工作台
+
+图片生成是同步一次性返回，没有流式与工具调用，因此**不复用** `UnifiedRequest` / `UnifiedResponse`，
+另立一对轻量类型：
+
+```
+ImageRequest  { model, prompt, negative_prompt, n, size, quality, style, response_format, user, extra }
+ImageResponse { created, model, images[], usage }
+```
+
+- **上游协议映射**：OpenAI 兼容渠道 `POST {base}/images/generations`；
+  Gemini 原生渠道 `generateContent` + `generationConfig.responseModalities = ["TEXT","IMAGE"]`，
+  结果从 `parts[].inlineData` 提取。Anthropic 协议无图片生成能力，选路时跳过并计入排除集
+  （不计渠道失败，避免把生图模型挂错协议导致渠道被熔断）。
+- **chat 接口回退**：聚合平台（OpenRouter 风格）常把部分模型的生图能力只开在 chat 接口下，
+  传 `modalities: ["image","text"]` 后结果落在 `message.images[]`（data URI）。
+  原生端点返回 400/404/405/415/422 这类"端点不认该模型"的错误时回退到 chat 接口重试一次；
+  鉴权、限流、服务端故障换接口同样失败，不触发回退。
+  这条路径完全复用既有的 `spec.Message.Images` 归一能力，无需新的解析代码。
+  代价是 chat 生图一次只出一张，且不支持尺寸/质量等标准字段（只能靠 `Extra` 透传）。
+- **图片转存**：上游返回的 `b64_json` 与临时 `url` 统一转存到配置的存储后端，
+  表中只存对象键与后端类型。上游链接通常数小时失效，转存后作品库才能长期回看；
+  单张转存失败时降级保留上游地址，不影响其余图片。
+- **存储可插拔**：`internal/pkg/storage` 定义 `Storage` 接口，两种实现——
+  本地磁盘（单机）与 S3 兼容对象存储（多实例 / 容器化，覆盖 AWS S3、Cloudflare R2、
+  阿里云 OSS、腾讯 COS、自建 MinIO）。配置由管理员在后台维护，存于 `app_settings`，
+  保存后即时重建后端，**无需重启**。
+  后端实例按类型常驻于 `studioStorage`：作品记录保存了写入时的后端类型，
+  因此**切换存储后历史作品仍按原后端回读**，不要求做数据迁移。
+- **回读方式**：配置了公开访问前缀（本地目录的静态地址 / 对象存储的 CDN 或公开域名）
+  时返回直链，前端直连存储，不占用网关带宽；否则经
+  `GET /api/v1/studio/works/{id}/images/{index}` 按登录态与作品归属校验后回读，
+  前端取回 blob 转临时地址渲染（`<img>` 无法携带 Authorization）。
+- **词库**：`prompt_templates` 按 10 个分类维护精选模板，迁移内置种子数据，支持分类筛选与关键词检索。
+- **可选模型**：由启用渠道的暴露模型汇总，口径是「模型目录声明 image 能力」或「模型名命中生图关键词」，
+  并排除不支持生图的渠道协议。
+- **计费**：图片生成没有 token 维度口径（`spec.Usage` 与 `call_logs` 均无「张数」字段），
+  本次只落调用日志不做预扣结算；按张计费待后续补充。
+
 ---
 
 ## 4. 数据模型清单
@@ -377,6 +432,8 @@ ALTER TABLE api_keys ADD COLUMN group_id BIGINT REFERENCES groups (id);
 | `skills` | 技能 | name、path、mode（full/index）、enabled |
 | `mcp_servers` | MCP 服务 | name、transport、command/url、enabled、allow_exec |
 | `settings` | 系统设置 | key、value（自用模式、技能与 MCP 开关、最大工具轮次等） |
+| `prompt_templates` | 绘图提示词词库 | category、title、summary、prompt、tags、model_hint、aspect_ratio、sort、enabled |
+| `image_works` | 绘图作品 | user_id、channel_id、model、prompt、params、images、status、image_count、latency_ms、source |
 | **`groups`** | **分组（新增）** | name、rpm_limit、rpd_limit、concurrency、daily_token_cap、over_limit、status、is_builtin |
 | **`group_models`** | **分组模型配置（新增）** | group_id、model、enabled、ratio |
 
@@ -391,6 +448,7 @@ ALTER TABLE api_keys ADD COLUMN group_id BIGINT REFERENCES groups (id);
 | 协议 | 路径 | 说明 |
 | --- | --- | --- |
 | OpenAI 兼容 | `POST /v1/chat/completions` | 主入口，支持流式（SSE） |
+| 文生图 | `POST /v1/images/generations` | OpenAI 兼容图片生成，同步返回 |
 | 模型列表 | `GET /v1/models` | 汇总所有渠道（含别名）支持的模型 |
 | Gemini 原生 | `POST /v1beta/models/*fullpath` | `generateContent` / `streamGenerateContent` |
 | Gemini 原生（前缀别名） | `POST /gemini/v1beta/models/*fullpath` | 便于反向代理分流 |
@@ -404,6 +462,7 @@ ALTER TABLE api_keys ADD COLUMN group_id BIGINT REFERENCES groups (id);
 | 密钥 | `GET/POST /api/v1/keys`、`POST /api/v1/keys/:id/revoke`、`DELETE /api/v1/keys/:id` |
 | 用量 | `GET /api/v1/usage/logs`、`GET /api/v1/usage/summary` |
 | 绑定 | `GET /api/v1/account/bindings`、Passkey 注册 begin/finish、GitHub authorize/callback |
+| 绘图 | `GET /api/v1/studio/models`、`GET /api/v1/studio/prompts`、`POST /api/v1/studio/images`、`GET /api/v1/studio/works`、`DELETE /api/v1/studio/works/:id`、`GET /api/v1/studio/works/:id/images/:index` |
 | 系统 | `GET /api/v1/system/info`、`GET /api/v1/system/status`、`POST /api/v1/system/install` |
 
 ### 5.3 管理侧接口
@@ -485,6 +544,9 @@ ReserveQuota(预估点数) ──► 上游调用 ──► Settle(真实点数)
     │   ├── 密钥管理   创建（明文仅一次）、列表、吊销、删除、累计用量
     │   ├── 调用历史   按模型 / 状态 / 时间筛选；token、点数、耗时、首字延迟、置信度
     │   └── 账号与安全 改密、Passkey、GitHub 绑定
+    ├── 创意
+    │   └── AI 绘图     左侧提示词词库（分类筛选 + 检索 + 一键套用）/ 右侧创作面板（模型、提示词、
+    │                   负向词、张数、尺寸、质量）/ 作品库标签页（网格回看、复用、下载、删除）
     └── 管理后台（仅管理员）
         ├── 用户管理   创建、启停、按元调整额度（1 元 = 1000 点）
         ├── 渠道管理   增删改查、连通性测试、自动探测模型、别名 / 注入 / 能力声明
@@ -540,9 +602,9 @@ ReserveQuota(预估点数) ──► 上游调用 ──► Settle(真实点数)
 
 | 阶段 | 内容 | 优先级 |
 | --- | --- | --- |
-| 已交付 | 用户与密钥、协议适配（OpenAI/Gemini/Anthropic 互转）、渠道自动探测（含 Anthropic / Claude Code 原生协议）、别名与参数注入、计量计费、调用日志、MCP 与技能、Passkey / GitHub 绑定、TLS | — |
+| 已交付 | 用户与密钥、协议适配（OpenAI/Gemini/Anthropic 互转）、渠道自动探测（含 Anthropic / Claude Code 原生协议）、别名与参数注入、计量计费、调用日志、MCP 与技能、Passkey / GitHub 绑定、TLS、**AI 绘图工作台（文生图 + 词库 + 作品库）** | — |
 | 本次设计 | **分组与分组级限流、分组级模型可用性与倍率覆盖** | P0 |
-| 下一步 | 渠道级熔断指标看板、按用户维度的图表下钻、告警通知（Webhook / 企业微信） | P1 |
+| 下一步 | 图片按张计费、图生图（`/v1/images/edits` 与参考图上传）、词库后台维护、渠道级熔断指标看板、按用户维度的图表下钻、告警通知（Webhook / 企业微信） | P1 |
 | 中期 | 提示词内容安全钩子、请求重放与灰度分流、模型成本估算与预算告警 | P2 |
 | 长期 | 多实例横向扩展与就近调度、插件化 adapter 市场、企业级 SSO（OIDC / SAML） | P3 |
 

@@ -21,6 +21,8 @@
 | `user_identities` | 第三方身份绑定表（GitHub 等） |
 | `webauthn_credentials` | 通行密钥（WebAuthn）凭证表 |
 | `audit_logs` | 审计日志表：安全相关操作留痕 |
+| `prompt_templates` | 绘图工作台提示词词库 |
+| `image_works` | 绘图工作台生成作品 |
 
 金额统一以「点」为单位：**1 点 = 0.001 元**（见 `constant.PointsPerYuan`）。
 倍率单位为 **点 / 1K tokens**。
@@ -202,3 +204,48 @@
 | `credential.import` / `credential.bind` / `credential.delete` | OAuth 凭证 |
 | `identity.bind` / `identity.unbind` | 第三方账号绑定 |
 | `passkey.register` / `passkey.delete` | 通行密钥 |
+
+---
+
+## prompt_templates · 提示词词库
+
+绘图工作台的提示词模板，由迁移内置种子数据，供创作面板一键套用。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | bigserial | 主键 |
+| category | varchar(32) | 分类键：portrait / product / poster / infographic / design / illustration / photo / editing / typography / brand |
+| title | varchar(128) | 标题 |
+| summary | varchar(255) | 摘要，卡片副标题 |
+| prompt | text | 提示词正文，可直接送入生图接口 |
+| tags | text | 标签 JSON 数组 |
+| model_hint | varchar(64) | 推荐模型名，仅作表单默认值 |
+| aspect_ratio | varchar(16) | 推荐画幅，如 1:1 / 9:16 |
+| sort | integer | 排序权重，越大越靠前 |
+| enabled | boolean | 是否对外可见 |
+| created_at / updated_at | timestamptz | 时间戳 |
+
+索引：`(category)`、`(enabled, sort DESC)`。
+
+## image_works · 绘图作品
+
+一次文生图请求对应一行；生成的图片转存到 `studio.data_dir`，表中只存相对路径。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | bigserial | 主键，同时作为图片目录名 |
+| user_id | bigint | 归属用户 |
+| api_key_id | bigint | 经 API Key 发起时记录密钥 ID，工作台发起为 0 |
+| channel_id | bigint | 实际处理的渠道 ID |
+| model | varchar(128) | 对外模型名 |
+| prompt | text | 用户输入的提示词 |
+| params | text | 生成参数 JSON：size / n / quality / aspect_ratio / template_id |
+| images | text | 结果 JSON 数组：`[{storage,key,url,mime_type,revised_prompt}]`。`storage` 为写入时的存储后端（local/s3），切换存储后仍按该后端回读；`url` 仅在转存失败时兜底保留上游地址 |
+| status | smallint | 1 成功 / 2 失败 |
+| error_message | text | 失败原因 |
+| image_count | integer | 成功生成的图片张数 |
+| latency_ms | integer | 端到端耗时 |
+| source | varchar(16) | 来源：studio / api |
+| created_at / updated_at | timestamptz | 时间戳 |
+
+索引：`(user_id, created_at DESC)`、`(status)`、`(channel_id)`。
