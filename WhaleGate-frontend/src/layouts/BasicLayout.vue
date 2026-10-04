@@ -12,6 +12,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   PercentageOutlined,
+  PictureOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
   UserOutlined,
@@ -48,6 +49,7 @@ const menus = computed<MenuItem[]>(() => {
     { key: '/keys', label: '密钥管理', icon: 'KeyOutlined', group: '用户门户' },
     { key: '/usage', label: '调用历史', icon: 'HistoryOutlined', group: '用户门户' },
     { key: '/account', label: '账号与安全', icon: 'UserOutlined', group: '用户门户' },
+    { key: '/studio', label: 'AI 绘图', icon: 'PictureOutlined', group: '创意' },
   ]
   if (userStore.isAdmin) {
     list.push(
@@ -86,6 +88,7 @@ const iconMap: Record<string, unknown> = {
   IdcardOutlined,
   KeyOutlined,
   PercentageOutlined,
+  PictureOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
 }

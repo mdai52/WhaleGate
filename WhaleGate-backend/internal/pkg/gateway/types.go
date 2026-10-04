@@ -12,6 +12,12 @@ type (
 	UnifiedRequest = spec.UnifiedRequest
 	// UnifiedResponse 统一非流式响应。
 	UnifiedResponse = spec.UnifiedResponse
+	// ImageRequest 统一文生图请求。
+	ImageRequest = spec.ImageRequest
+	// ImageResponse 统一文生图响应。
+	ImageResponse = spec.ImageResponse
+	// Image 统一图片内容。
+	Image = spec.Image
 	// StreamChunk 统一流式响应块。
 	StreamChunk = spec.StreamChunk
 	// StreamChoice 流式候选。

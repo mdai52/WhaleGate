@@ -410,3 +410,74 @@ export interface BindingsResult {
   passkey_enabled: boolean
   passkey_config: PasskeyConfig
 }
+
+// ---------------------------------------------------------------- 绘图工作台
+
+/** 词库分类与条目数 */
+export interface PromptCategory {
+  key: string
+  label: string
+  count: number
+}
+
+/** 提示词模板 */
+export interface PromptTemplate {
+  id: number
+  category: string
+  category_label: string
+  title: string
+  summary: string
+  prompt: string
+  tags: string[]
+  model_hint: string
+  aspect_ratio: string
+}
+
+/** 词库查询结果 */
+export interface PromptLibrary {
+  categories: PromptCategory[]
+  items: PromptTemplate[]
+}
+
+/** 可选的生图模型 */
+export interface StudioModel {
+  model: string
+  channel: string
+}
+
+/** 作品中的一张图片 */
+export interface StudioImage {
+  url: string
+  need_auth: boolean
+  mime_type: string
+  revised_prompt?: string
+}
+
+/** 绘图作品 */
+export interface ImageWork {
+  id: number
+  model: string
+  prompt: string
+  params: Record<string, unknown>
+  images: StudioImage[]
+  status: number
+  image_count: number
+  latency_ms: number
+  source: string
+  channel_id: number
+  error_message?: string
+  created_at: string
+}
+
+/** 在线生成入参 */
+export interface ImageGenerateInput {
+  model: string
+  prompt: string
+  negative_prompt?: string
+  n?: number
+  size?: string
+  quality?: string
+  aspect_ratio?: string
+  template_id?: number
+  extra?: Record<string, unknown>
+}

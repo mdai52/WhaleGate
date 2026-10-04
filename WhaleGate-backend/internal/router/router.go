@@ -87,6 +87,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 	oauthHandler := handler.NewOAuthHandler(d.Svc)
 	credentialHandler := handler.NewCredentialHandler(d.Svc)
 	account := handler.NewAccountHandler(d.Svc)
+	studio := handler.NewStudioHandler(d.Svc)
 
 	pub := e.Group("/api/v1/auth")
 	// 认证接口按 IP 限流 + 登录失败锁定（见 service.Login）
@@ -141,6 +142,17 @@ func registerAPI(e *gin.Engine, d Deps) {
 			accountGroup.POST("/passkey/register/finish", account.PasskeyRegisterFinish)
 			accountGroup.GET("/github/authorize", account.GitHubAuthorize)
 			accountGroup.POST("/github/callback", account.GitHubCallbackJSON)
+		}
+
+		// 绘图工作台：词库、在线生成与作品库
+		studioGroup := authed.Group("/studio")
+		{
+			studioGroup.GET("/models", studio.Models)
+			studioGroup.GET("/prompts", studio.Prompts)
+			studioGroup.POST("/images", studio.Generate)
+			studioGroup.GET("/works", studio.Works)
+			studioGroup.DELETE("/works/:id", studio.DeleteWork)
+			studioGroup.GET("/works/:id/images/:index", studio.WorkImage)
 		}
 	}
 
@@ -224,12 +236,14 @@ func registerAPI(e *gin.Engine, d Deps) {
 // registerGateway 注册 OpenAI 兼容入口与 Gemini 原生入口。
 func registerGateway(e *gin.Engine, d Deps) {
 	relay := handler.NewRelayHandler(d.Svc)
+	image := handler.NewImageHandler(d.Svc)
 
 	openaiGroup := e.Group("/v1")
 	openaiGroup.Use(middleware.APIKeyAuth(d.Svc), middleware.RateLimit(d.Svc))
 	{
 		openaiGroup.GET("/models", relay.ListModels)
 		openaiGroup.POST("/chat/completions", relay.ChatCompletions)
+		openaiGroup.POST("/images/generations", image.Generations)
 	}
 
 	// Gemini 原生：/v1beta/models/{model}:generateContent 与 :streamGenerateContent

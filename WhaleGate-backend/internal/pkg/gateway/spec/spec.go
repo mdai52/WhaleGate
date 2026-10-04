@@ -67,6 +67,8 @@ type Image struct {
 	B64Data string `json:"b64_data,omitempty"`
 	// URL 远程地址，与 B64Data 二选一。
 	URL string `json:"url,omitempty"`
+	// RevisedPrompt 上游改写后的提示词（图片生成接口返回）。
+	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 
 // DataURI 生成 data URI；无 base64 载荷时返回 URL 本身。
@@ -241,6 +243,45 @@ func (r *UnifiedResponse) Text() string {
 		return ""
 	}
 	return r.Choices[0].Message.Content
+}
+
+// ---------------------------------------------------------------- 图片生成
+
+// ImageRequest 统一的文生图请求，字段对齐 OpenAI /v1/images/generations。
+// 该接口是同步一次性返回，没有流式形态，因此不与 UnifiedRequest 合并。
+type ImageRequest struct {
+	// Model 对外暴露的模型名。
+	Model string `json:"model"`
+	// Prompt 提示词。
+	Prompt string `json:"prompt"`
+	// NegativePrompt 负向提示词，部分上游（SD 系、通义万相等）支持。
+	NegativePrompt string `json:"negative_prompt,omitempty"`
+	// N 生成张数。
+	N int `json:"n,omitempty"`
+	// Size 尺寸，如 1024x1024。
+	Size string `json:"size,omitempty"`
+	// Quality 质量档位：standard / hd，或 gpt-image 的 low / medium / high。
+	Quality string `json:"quality,omitempty"`
+	// Style 风格，仅 DALL·E 3 支持。
+	Style string `json:"style,omitempty"`
+	// ResponseFormat 返回格式：url 或 b64_json；为空时由上游决定。
+	ResponseFormat string `json:"response_format,omitempty"`
+	// User 终端用户标识，用于上游风控。
+	User string `json:"user,omitempty"`
+	// Extra 上游扩展参数（反向提示词、水印开关、seed 等），原样透传。
+	Extra map[string]interface{} `json:"-"`
+}
+
+// ImageResponse 统一的文生图结果。
+type ImageResponse struct {
+	// Created 生成时间（Unix 秒）。
+	Created int64 `json:"created"`
+	// Model 实际使用的模型名。
+	Model string `json:"model,omitempty"`
+	// Images 生成的图片列表。
+	Images []Image `json:"images"`
+	// Usage token 用量，仅部分上游上报。
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // Delta 流式增量内容。

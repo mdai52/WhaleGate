@@ -43,6 +43,8 @@ type Container struct {
 	scripts  *scripts
 	// tlsProvider 当前 TLS 证书与启用状态的持有者，支持运行时热替换证书。
 	tlsProvider *tlsCertProvider
+	// studioStore 绘图工作台的图片存储后端，管理员改配置后即时重建。
+	studioStore *studioStorage
 	// restartCh 当监听模式（HTTP<->HTTPS）需要变更时触发进程自重启。
 	restartCh chan struct{}
 }
@@ -67,6 +69,7 @@ func New(cfg *config.Config, db *gorm.DB, rdb *redis.Client, lg *zap.Logger) *Co
 	c.Audits = NewAuditWriter(db, lg, 2048)
 	c.WebAuthn = c.buildWebAuthn()
 	c.tlsProvider = newTLSCertProvider()
+	c.studioStore = newStudioStorage()
 	c.restartCh = make(chan struct{}, 1)
 	return c
 }
