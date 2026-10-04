@@ -8,7 +8,7 @@
 import { ref } from 'vue'
 import { CopyOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { CLIENT_PRESETS, type ClientPreset } from '@/utils/clients'
+import { CLIENT_PRESETS, endpointFor, snippetFor, type ClientPreset } from '@/utils/clients'
 
 defineProps<{
   /** 当前密钥的打码展示值，仅作提示 */
@@ -22,16 +22,12 @@ const fullKey = ref('')
 
 const origin = window.location.origin
 
-function endpointFor(preset: ClientPreset) {
-  return preset.endpoint === 'root' ? origin : `${origin}/v1`
+function addressOf(preset: ClientPreset) {
+  return endpointFor(preset, origin)
 }
 
-function snippetFor(preset: ClientPreset) {
-  const key = fullKey.value.trim() || '<在此粘贴完整明文>'
-  if (preset.endpoint === 'root') {
-    return `export ANTHROPIC_BASE_URL="${origin}"\nexport ANTHROPIC_AUTH_TOKEN="${key}"`
-  }
-  return `Base URL:  ${origin}/v1\nAPI Key:   ${key}\nModel:     <模型名>`
+function configOf(preset: ClientPreset) {
+  return snippetFor(preset, { origin, apiKey: fullKey.value })
 }
 
 async function copy(text: string, tip: string) {
@@ -44,7 +40,7 @@ async function copy(text: string, tip: string) {
 }
 
 function download(preset: ClientPreset) {
-  const text = snippetFor(preset)
+  const text = configOf(preset)
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -89,42 +85,29 @@ function download(preset: ClientPreset) {
         <a-space direction="vertical" style="width: 100%">
           <div class="wg-muted">{{ preset.desc }}</div>
 
-          <a-alert
-            v-if="preset.blockedReason"
-            type="warning"
-            show-icon
-            :message="`暂不可导入：${preset.blockedReason}`"
-          />
-
-          <template v-else>
-            <a-descriptions bordered size="small" :column="1">
-              <a-descriptions-item label="API 地址">
-                <code>{{ endpointFor(preset) }}</code>
-                <a-button
-                  type="link"
-                  size="small"
-                  @click="copy(endpointFor(preset), '地址已复制')"
-                >
-                  <CopyOutlined />
-                </a-button>
-              </a-descriptions-item>
-            </a-descriptions>
-
-            <ol class="wg-tips">
-              <li v-for="(tip, index) in preset.tips" :key="index">{{ tip }}</li>
-            </ol>
-
-            <a-space wrap>
-              <a-button size="small" @click="copy(snippetFor(preset), '配置已复制')">
+          <a-descriptions bordered size="small" :column="1">
+            <a-descriptions-item :label="preset.endpoint === 'root' ? '网关地址' : 'API 地址'">
+              <code>{{ addressOf(preset) }}</code>
+              <a-button type="link" size="small" @click="copy(addressOf(preset), '地址已复制')">
                 <CopyOutlined />
-                复制配置
               </a-button>
-              <a-button v-if="preset.filename" size="small" @click="download(preset)">
-                <DownloadOutlined />
-                下载配置
-              </a-button>
-            </a-space>
-          </template>
+            </a-descriptions-item>
+          </a-descriptions>
+
+          <ol class="wg-tips">
+            <li v-for="(tip, index) in preset.tips" :key="index">{{ tip }}</li>
+          </ol>
+
+          <a-space wrap>
+            <a-button size="small" @click="copy(configOf(preset), '配置已复制')">
+              <CopyOutlined />
+              复制配置
+            </a-button>
+            <a-button v-if="preset.filename" size="small" @click="download(preset)">
+              <DownloadOutlined />
+              下载配置
+            </a-button>
+          </a-space>
         </a-space>
       </a-collapse-panel>
     </a-collapse>

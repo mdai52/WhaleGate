@@ -458,6 +458,7 @@ ImageResponse { created, model, images[], usage }
 | OpenAI 兼容 | `POST /v1/chat/completions` | 主入口，支持流式（SSE） |
 | 文生图 | `POST /v1/images/generations` | OpenAI 兼容图片生成，同步返回 |
 | 模型列表 | `GET /v1/models` | 汇总所有渠道（含别名）支持的模型 |
+| Anthropic 原生 | `POST /v1/messages` | Claude Code / CCSwitch 等只认 Messages API 的客户端接入；入站按 Anthropic 协议解析，再按渠道协议转发 |
 | Gemini 原生 | `POST /v1beta/models/*fullpath` | `generateContent` / `streamGenerateContent` |
 | Gemini 原生（前缀别名） | `POST /gemini/v1beta/models/*fullpath` | 便于反向代理分流 |
 

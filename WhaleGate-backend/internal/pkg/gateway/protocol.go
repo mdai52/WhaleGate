@@ -17,10 +17,15 @@ import (
 // ParseClientRequest 按客户端协议解析入站请求体。
 // Gemini 的模型名来自 URL 路径，因此额外接收 model 参数。
 func ParseClientRequest(clientProtocol string, raw []byte, model string) (*UnifiedRequest, error) {
-	if clientProtocol == ProtocolGemini {
+	switch {
+	case clientProtocol == ProtocolGemini:
 		return gemini.ParseRequest(raw, model)
+	case IsAnthropicLike(clientProtocol):
+		// Anthropic 的 model 在请求体里，无需路径参数
+		return anthropic.ParseRequest(raw)
+	default:
+		return openai.ParseRequest(raw)
 	}
-	return openai.ParseRequest(raw)
 }
 
 // ---------------------------------------------------------------- 上游侧
@@ -133,21 +138,46 @@ func ExtractUpstreamError(channelType string, raw []byte) string {
 
 // WriteClientResponse 按客户端协议输出非流式响应。
 func WriteClientResponse(clientProtocol string, c *gin.Context, resp *UnifiedResponse) {
-	if clientProtocol == ProtocolGemini {
+	switch {
+	case clientProtocol == ProtocolGemini:
 		c.JSON(http.StatusOK, gemini.BuildResponse(resp))
-		return
+	case IsAnthropicLike(clientProtocol):
+		c.JSON(http.StatusOK, anthropic.BuildResponse(resp))
+	default:
+		c.JSON(http.StatusOK, openai.BuildResponse(resp))
 	}
-	c.JSON(http.StatusOK, openai.BuildResponse(resp))
 }
 
 // WriteClientError 按客户端协议输出错误。
 func WriteClientError(clientProtocol string, c *gin.Context, status int, message string) {
-	if clientProtocol == ProtocolGemini {
-		body := gemini.ErrorResponse(message, http.StatusText(status))
-		c.JSON(status, body)
-		return
+	switch {
+	case clientProtocol == ProtocolGemini:
+		c.JSON(status, gemini.ErrorResponse(message, http.StatusText(status)))
+	case IsAnthropicLike(clientProtocol):
+		c.JSON(status, anthropic.ErrorResponse(message, anthropicErrorType(status)))
+	default:
+		c.JSON(status, openai.ErrorResponse(message, "server_error"))
 	}
-	c.JSON(status, openai.ErrorResponse(message, "server_error"))
+}
+
+// anthropicErrorType 把 HTTP 状态映射到 Anthropic 的错误类型。
+func anthropicErrorType(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	default:
+		return "api_error"
+	}
 }
 
 // WriteClientStreamHeader 设置 SSE 响应头。
@@ -162,47 +192,79 @@ func WriteClientStreamHeader(clientProtocol string, c *gin.Context) {
 	c.Writer.WriteHeader(http.StatusOK)
 }
 
-// WriteClientStreamChunk 按客户端协议写出一个流式块。
-func WriteClientStreamChunk(clientProtocol string, w io.Writer, chunk *StreamChunk) error {
-	var (
-		data []byte
-		err  error
-	)
-	if clientProtocol == ProtocolGemini {
-		data, err = gemini.BuildStreamEvent(chunk)
-	} else {
-		data, err = openai.BuildStreamEvent(chunk)
+// ClientStreamEncoder 把统一流式块编码为客户端协议的事件序列。
+//
+// 之所以设计成带状态的对象而不是逐块函数：Anthropic 的 SSE 是严格有序的事件序列
+// （message_start → content_block_start → delta* → content_block_stop →
+// message_delta → message_stop），必须跨块记住「已发过 message_start 没有」
+// 「当前打开的是第几个内容块」，逐块独立编码无法表达。
+// OpenAI / Gemini 无此需求，用无状态包装实现同一接口，调用方无感。
+type ClientStreamEncoder interface {
+	// Write 编码一个统一流式块。
+	Write(chunk *StreamChunk) error
+	// Close 输出收尾事件（OpenAI 的 [DONE]、Anthropic 的 message_stop 等）。
+	Close() error
+	// WriteError 在流已开始后输出错误事件。
+	WriteError(message string) error
+}
+
+// NewClientStreamEncoder 按客户端协议构造流式编码器。
+func NewClientStreamEncoder(clientProtocol string, w io.Writer) ClientStreamEncoder {
+	switch {
+	case clientProtocol == ProtocolGemini:
+		return &geminiStreamEncoder{w: w}
+	case IsAnthropicLike(clientProtocol):
+		return anthropic.NewStreamEncoder(w)
+	default:
+		return &openAIStreamEncoder{w: w}
 	}
+}
+
+// openAIStreamEncoder OpenAI 逐块独立编码，收尾补 [DONE]。
+type openAIStreamEncoder struct{ w io.Writer }
+
+func (e *openAIStreamEncoder) Write(chunk *StreamChunk) error {
+	data, err := openai.BuildStreamEvent(chunk)
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(data)
+	_, err = e.w.Write(data)
 	return err
 }
 
-// WriteClientStreamTail 输出流式结束标记（Gemini 无需）。
-func WriteClientStreamTail(clientProtocol string, w io.Writer) error {
-	if clientProtocol == ProtocolGemini {
-		return nil
-	}
-	_, err := w.Write(openai.DoneEvent())
+func (e *openAIStreamEncoder) Close() error {
+	_, err := e.w.Write(openai.DoneEvent())
 	return err
 }
 
-// WriteClientStreamError 在流式中输出错误块（流已开始时使用）。
-func WriteClientStreamError(clientProtocol string, w io.Writer, message string) error {
-	if clientProtocol == ProtocolGemini {
-		data, err := json.Marshal(gemini.ErrorResponse(message, "INTERNAL"))
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(append(append([]byte("data: "), data...), '\r', '\n', '\r', '\n'))
-		return err
-	}
+func (e *openAIStreamEncoder) WriteError(message string) error {
 	data, err := json.Marshal(openai.ErrorResponse(message, "server_error"))
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(append(append([]byte("data: "), data...), '\n', '\n'))
+	_, err = e.w.Write(append(append([]byte("data: "), data...), '\n', '\n'))
+	return err
+}
+
+// geminiStreamEncoder Gemini 用 JSON 数组流，无独立结束标记。
+type geminiStreamEncoder struct{ w io.Writer }
+
+func (e *geminiStreamEncoder) Write(chunk *StreamChunk) error {
+	data, err := gemini.BuildStreamEvent(chunk)
+	if err != nil {
+		return err
+	}
+	_, err = e.w.Write(data)
+	return err
+}
+
+func (e *geminiStreamEncoder) Close() error { return nil }
+
+func (e *geminiStreamEncoder) WriteError(message string) error {
+	data, err := json.Marshal(gemini.ErrorResponse(message, "INTERNAL"))
+	if err != nil {
+		return err
+	}
+	_, err = e.w.Write(append(append([]byte("data: "), data...), '\r', '\n', '\r', '\n'))
 	return err
 }

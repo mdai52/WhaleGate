@@ -285,9 +285,11 @@ curl ${baseURL.value}/chat/completions \\
         <a-tab-pane key="faq" tab="常见问题">
           <a-collapse>
             <a-collapse-panel key="1" header="支持哪些客户端？">
-              任何兼容 OpenAI 协议的客户端与 SDK 都能接入，只需替换 <code>base_url</code> 与
-              <code>api_key</code>；Gemini 原生客户端可用
-              <code>/v1beta/models/{model}:generateContent</code>。具体填法见「客户端接入」。
+              兼容 OpenAI 协议的客户端与 SDK 接入时，替换 <code>base_url</code> 与
+              <code>api_key</code> 即可；Gemini 原生客户端可用
+              <code>/v1beta/models/{model}:generateContent</code>；
+              Claude Code、CCSwitch 这类只认 Anthropic Messages API 的工具，
+              可直接把地址指向本网关的 <code>/v1/messages</code>。具体填法见「客户端接入」。
             </a-collapse-panel>
             <a-collapse-panel key="2" header="传了参数但上游没生效？">
               先看响应头 <code>X-WG-Params-Dropped</code>。被丢弃通常是两个原因：该渠道未声明支持这个参数，

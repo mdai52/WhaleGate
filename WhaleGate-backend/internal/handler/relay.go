@@ -70,6 +70,15 @@ func (h *RelayHandler) ChatCompletions(c *gin.Context) {
 	h.relay(c, gateway.ProtocolOpenAI, "", false)
 }
 
+// Messages Anthropic Messages API 入站入口：POST /v1/messages
+//
+// 供 Claude Code、CCSwitch 这类只认 /v1/messages 的客户端接入。
+// 请求体按 Anthropic 协议解析后归一为统一格式，再按渠道协议转发，
+// 因此这些客户端可以调用任意渠道上的模型，不受上游协议限制。
+func (h *RelayHandler) Messages(c *gin.Context) {
+	h.relay(c, gateway.ProtocolAnthropic, "", false)
+}
+
 // GeminiNative Gemini 原生入口：/v1beta/models/{model}:generateContent
 // 与 :streamGenerateContent（alt=sse）。
 func (h *RelayHandler) GeminiNative(c *gin.Context) {
@@ -517,6 +526,8 @@ func (h *RelayHandler) forwardStream(
 	scanner := gateway.NewSSEScanner(resp.Body)
 	// 按协议选择解码器：Anthropic 的工具参数分片下发，解码器需贯穿整个流。
 	decoder := gateway.NewStreamDecoder(channel.Type)
+	// 客户端侧同样需要状态：Anthropic 入站的 SSE 是严格有序的事件序列。
+	encoder := gateway.NewClientStreamEncoder(clientProtocol, c.Writer)
 	usage := &gateway.Usage{}
 	var firstToken time.Duration
 	start := time.Now()
@@ -531,7 +542,7 @@ func (h *RelayHandler) forwardStream(
 		}
 		if err != nil {
 			if ctx.Err() == nil {
-				_ = gateway.WriteClientStreamError(clientProtocol, c.Writer, "上游流中断")
+				_ = encoder.WriteError("上游流中断")
 			}
 			break
 		}
@@ -550,7 +561,7 @@ func (h *RelayHandler) forwardStream(
 		usage.Add(chunk.Usage)
 
 		chunk.Model = reqModel(channel, chunk.Model)
-		if err := gateway.WriteClientStreamChunk(clientProtocol, c.Writer, chunk); err != nil {
+		if err := encoder.Write(chunk); err != nil {
 			break
 		}
 		if flusher != nil {
@@ -558,7 +569,7 @@ func (h *RelayHandler) forwardStream(
 		}
 	}
 
-	_ = gateway.WriteClientStreamTail(clientProtocol, c.Writer)
+	_ = encoder.Close()
 	if flusher != nil {
 		flusher.Flush()
 	}

@@ -8,17 +8,37 @@ export interface ClientPreset {
   key: string
   name: string
   desc: string
-  /** 客户端要求的网关地址形态 */
+  /** 客户端要求的网关地址形态：多数客户端要带 /v1，Anthropic 系客户端只要根地址 */
   endpoint: 'with-v1' | 'root'
   /** 填写要点 */
   tips: string[]
-  /** 尚未支持时的原因；有值时该客户端不可导入 */
-  blockedReason?: string
-  /** 可下载的配置文件名 */
+  /** 可下载的配置文件名；不填表示该客户端无标准配置文件 */
   filename?: string
 }
 
+/** 生成配置所需的三要素 */
+export interface ClientContext {
+  /** 网关根地址，如 https://gw.example.com */
+  origin: string
+  /** 完整密钥明文 */
+  apiKey: string
+  /** 模型名，可选 */
+  model?: string
+}
+
 export const CLIENT_PRESETS: ClientPreset[] = [
+  {
+    key: 'claude-code',
+    name: 'Claude Code / CCSwitch',
+    desc: 'Anthropic 官方 CLI 及其供应商切换器',
+    endpoint: 'root',
+    tips: [
+      'Claude Code：设置环境变量 ANTHROPIC_BASE_URL 与 ANTHROPIC_AUTH_TOKEN 后直接运行 claude',
+      'CCSwitch：新增供应商，类型选 Claude Code，Base URL 与 Token 填下面两个值',
+      '也可把 env 写进 Claude Code 的 settings.json',
+    ],
+    filename: 'whalegate-claude-code.sh',
+  },
   {
     key: 'cherry-studio',
     name: 'Cherry Studio',
@@ -29,7 +49,7 @@ export const CLIENT_PRESETS: ClientPreset[] = [
       'API 地址填下方地址，API 密钥填完整明文',
       '在「模型」里点添加，填入要使用的模型名',
     ],
-    filename: 'whalegate-cherry.json',
+    filename: 'whalegate-openai.json',
   },
   {
     key: 'chatbox',
@@ -107,12 +127,35 @@ export const CLIENT_PRESETS: ClientPreset[] = [
       'apiBase 填下方地址，apiKey 填完整明文，model 填模型名',
     ],
   },
-  {
-    key: 'claude-code',
-    name: 'Claude Code / CCSwitch',
-    desc: 'Anthropic 官方 CLI 及其供应商切换器',
-    endpoint: 'root',
-    tips: [],
-    blockedReason: '该工具要求服务端提供 Anthropic Messages API（/v1/messages），本网关当前未提供此入站入口',
-  },
 ]
+
+/** 该客户端应填入的 API 地址。 */
+export function endpointFor(preset: ClientPreset, origin: string): string {
+  return preset.endpoint === 'root' ? origin : `${origin}/v1`
+}
+
+/**
+ * 生成该客户端的可复制配置。
+ *
+ * Anthropic 系客户端用环境变量，其余按 OpenAI 兼容的三要素给出。
+ */
+export function snippetFor(preset: ClientPreset, ctx: ClientContext): string {
+  const key = ctx.apiKey.trim() || '<在此填入完整密钥>'
+  const model = (ctx.model ?? '').trim() || '<模型名>'
+
+  if (preset.endpoint === 'root') {
+    const settings = JSON.stringify(
+      { env: { ANTHROPIC_BASE_URL: ctx.origin, ANTHROPIC_AUTH_TOKEN: key } },
+      null,
+      2,
+    )
+    return `export ANTHROPIC_BASE_URL="${ctx.origin}"
+export ANTHROPIC_AUTH_TOKEN="${key}"
+
+# 或写入 Claude Code 的 settings.json：
+${settings}`
+  }
+  return `Base URL:  ${ctx.origin}/v1
+API Key:   ${key}
+Model:     ${model}`
+}

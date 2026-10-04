@@ -265,6 +265,8 @@ func registerGateway(e *gin.Engine, d Deps) {
 		openaiGroup.GET("/models", relay.ListModels)
 		openaiGroup.POST("/chat/completions", relay.ChatCompletions)
 		openaiGroup.POST("/images/generations", image.Generations)
+		// Anthropic Messages API 入站：Claude Code / CCSwitch 等客户端接入用
+		openaiGroup.POST("/messages", relay.Messages)
 	}
 
 	// Gemini 原生：/v1beta/models/{model}:generateContent 与 :streamGenerateContent

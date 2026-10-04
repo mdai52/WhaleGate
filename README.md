@@ -194,6 +194,7 @@ location / {
 | OpenAI 兼容 | `http://<host>:8080/v1/chat/completions` |
 | 文生图 | `http://<host>:8080/v1/images/generations` |
 | 模型列表 | `http://<host>:8080/v1/models` |
+| Anthropic 原生 | `http://<host>:8080/v1/messages` |
 | Gemini 原生 | `http://<host>:8080/v1beta/models/{model}:generateContent` |
 
 ## 首次安装与安全
