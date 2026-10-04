@@ -73,7 +73,9 @@ async function submit() {
       description="请修改为自己的密码后再继续使用；修改完成前无法进行其它操作。"
       style="margin-bottom: 16px"
     />
-    <a-form layout="vertical" @finish="submit">
+    <!-- 必须带 :model：ant-design-vue 的 a-form 只在有 model 时才 emit('finish')，
+         缺了它「修改密码」点了既没反应也没报错，强制改密的用户会被卡死。 -->
+    <a-form :model="form" layout="vertical" @finish="submit">
       <a-form-item label="原密码">
         <a-input-password v-model:value="form.oldPassword" placeholder="容器日志中的初始密码" />
       </a-form-item>

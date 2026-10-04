@@ -166,7 +166,9 @@ load()
     </a-card>
 
     <a-modal v-model:open="modalOpen" :title="editingId ? '编辑倍率' : '新增倍率'" :footer="null" :width="440">
-      <a-form layout="vertical" @finish="submit">
+      <!-- 必须带 :model：ant-design-vue 的 a-form 只在有 model 时才 emit('finish')，
+           缺了它「保存」点了既没反应也没报错。 -->
+      <a-form :model="form" layout="vertical" @finish="submit">
         <a-form-item label="模型名">
           <a-auto-complete
             v-model:value="form.model"

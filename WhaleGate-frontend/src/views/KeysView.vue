@@ -420,8 +420,10 @@ onMounted(load)
 
     <a-modal v-model:open="createOpen" title="新建密钥" :footer="null" :width="480">
       <template v-if="!newKey">
-        <a-form layout="vertical" @finish="submitCreate">
-          <a-form-item label="名称" required>
+        <!-- 必须带 :model：ant-design-vue 的 a-form 只在有 model 时才 emit('finish')，
+             缺了它提交按钮点了既没反应也没报错。 -->
+        <a-form :model="form" layout="vertical" @finish="submitCreate">
+          <a-form-item label="名称（留空则为「默认密钥」）">
             <a-input v-model:value="form.name" placeholder="例如：生产环境-后端服务" allow-clear />
           </a-form-item>
 

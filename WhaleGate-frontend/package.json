@@ -9,6 +9,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "type-check": "vue-tsc --noEmit",
+    "check:forms": "node scripts/check-form-model.mjs",
     "format": "prettier --write \"src/**/*.{ts,vue,css}\""
   },
   "dependencies": {
