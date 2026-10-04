@@ -163,6 +163,11 @@ func (c *Container) CreateAPIKey(ctx context.Context, userID uint, in CreateKeyI
 		return nil, "", apierr.New(apierr.ErrInvalidParam, "名称长度不能超过 64 字符")
 	}
 
+	// 分组必须是管理员配置过的，避免写入拼错的标识导致策略静默不生效。
+	if err := c.EnsureGroupExists(ctx, in.GroupTag); err != nil {
+		return nil, "", err
+	}
+
 	plain, err := c.newAPIKeyPlain(in.CustomKey)
 	if err != nil {
 		return nil, "", err
@@ -366,6 +371,10 @@ func (c *Container) UpdateAPIKey(ctx context.Context, userID, id uint, in Update
 			return nil, apierr.New(apierr.ErrInvalidParam, "名称长度不能超过 64 字符")
 		}
 		key.Name = name
+	}
+	// 分组必须是管理员配置过的，避免写入拼错的标识导致策略静默不生效。
+	if err := c.EnsureGroupExists(ctx, in.GroupTag); err != nil {
+		return nil, err
 	}
 	key.GroupTag = strings.TrimSpace(in.GroupTag)
 	key.QPM = in.QPM

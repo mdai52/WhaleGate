@@ -122,7 +122,7 @@
 | --- | --- |
 | 鉴权 | `Authorization: Bearer sk-xxx`；库中只存 SHA-256 摘要，校验时哈希比对 |
 | 密钥策略 | API Key 级策略（`key_policies`）：可用模型、额度、有效期 |
-| 限流 | Redis 原子计数，按「分组」维度限制（详见 3.6） |
+| 限流 | Redis 原子计数；QPM 与并发按「密钥级 > 分组级 > 全局默认」逐层回落（详见 3.6） |
 | 请求体上限 | `http.MaxBytesReader`，8MB |
 | 安全响应头 | CSP / X-Frame-Options / nosniff / Referrer-Policy / Permissions-Policy / COOP，HTTPS 下附加 HSTS |
 | 真实客户端 IP | 支持 `server.trusted_proxies` 与 `server.real_ip_header`，兼容 `X-Forwarded-For` / `X-Real-IP` |
@@ -223,104 +223,93 @@ Claude Code 网关（`/v1/models` + `Bearer`）→ Codex → Gemini 原生（`?k
 - 密钥统计：创建时间、最近使用、累计请求、累计 token（供用户自查异常消耗）
 - 账号安全：`must_change_password` 标记存在时，除改密与登出外所有接口返回 403
 
-### 3.6 分组与限流（本版新增设计）
+### 3.6 分组与限流
 
-> 目标：管理员可**按分组**设置限流策略，并**按分组**配置模型可用性与倍率覆盖。
+> 目标：管理员可**按分组**统一配置倍率与限流策略，密钥创建时选择分组即可继承。
 
 #### 3.6.1 实体设计
 
 ```
-users.group_id ──┐
-api_keys.group_id┤
-                 ├──► groups（分组）
-                 │      ├─ 限额策略（RPM / RPD / 并发 / 日 Token）
-                 │      ├─ 超限策略（拒绝 / 降级排队）
-                 │      ├─ 状态（启用 / 停用）
-                 │      └──► group_models（分组级模型可用性与倍率覆盖）
-                 └──► 默认分组 default（系统内置，不可删除）
+api_keys.group_tag ──► key_groups（分组）
+                        ├─ 倍率系数（在模型倍率算出的点数上相乘）
+                        ├─ QPM / 并发上限（0 = 该层不设限）
+                        └─ 状态（启用 / 停用）
+                        └──► 默认分组 default（迁移预置，不可删除）
 ```
 
-**归属优先级**：API Key 上的分组 > 用户所属分组 > 默认分组。
-这样同一用户可以为不同用途签发不同分组的 Key（例如一个跑批量任务、一个跑在线对话）。
+**归属与优先级**
+
+- 分组记录在 `api_keys.group_tag`（分组标识），一个密钥至多一个分组；
+- 限流生效值按 **密钥级 > 分组级 > 全局默认** 逐层回落，每层的 `0` 都表示「该层不设限」；
+- 倍率：`最终点数 = 按模型倍率算出的点数 × 分组倍率系数`。分组系数与按模型的倍率保持正交，
+  管理员只需给分组一个系数，不必为每个分组重复维护整张模型倍率表。
+
+**为什么用标识而不是外键**
+
+`group_tag` 在引入分组之前就已存在（自由文本标签），沿用它意味着**无需回填任何存量数据**。
+语义上也更贴切：分组是「策略预设」而非「权限域」，弱引用比外键级联更合适——
+分组被删除或禁用时，其下密钥自动回落为中性策略（系数 1、不额外限流），
+而不是因为约束失败让线上调用中断。
 
 #### 3.6.2 表设计
 
 ```sql
--- 000017_groups.up.sql
-CREATE TABLE groups (
-    id              BIGSERIAL PRIMARY KEY,
-    name            VARCHAR(64)  NOT NULL,
-    description     VARCHAR(255) NOT NULL DEFAULT '',
-    rpm_limit       INTEGER      NOT NULL DEFAULT 60,       -- 每分钟请求数，0 = 不限
-    rpd_limit       INTEGER      NOT NULL DEFAULT 2000,     -- 每日请求数，0 = 不限
-    concurrency     INTEGER      NOT NULL DEFAULT 10,       -- 最大并发，0 = 不限
-    daily_token_cap BIGINT       NOT NULL DEFAULT 0,        -- 单日 token 上限，0 = 不限
-    over_limit      VARCHAR(16)  NOT NULL DEFAULT 'reject', -- reject | queue
-    queue_timeout   INTEGER      NOT NULL DEFAULT 30,       -- 排队最长等待秒数
-    is_builtin      BOOLEAN      NOT NULL DEFAULT FALSE,    -- default 分组内置标记
-    status          SMALLINT     NOT NULL DEFAULT 1,        -- 1 启用 / 0 停用
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+CREATE TABLE key_groups (
+    id               BIGSERIAL PRIMARY KEY,
+    name             VARCHAR(64)      NOT NULL,            -- 分组标识，密钥上记录的就是它
+    display_name     VARCHAR(64)      NOT NULL DEFAULT '',
+    description      VARCHAR(255)     NOT NULL DEFAULT '',
+    ratio_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,  -- 倍率系数，1 = 不加价
+    qpm              INTEGER          NOT NULL DEFAULT 0,  -- 0 = 该层不设限
+    concurrency      INTEGER          NOT NULL DEFAULT 0,
+    enabled          BOOLEAN          NOT NULL DEFAULT TRUE,
+    created_at       TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    deleted_at       TIMESTAMPTZ                           -- 软删除
 );
-CREATE UNIQUE INDEX uk_groups_name ON groups (name);
 
-CREATE TABLE group_models (
-    id        BIGSERIAL PRIMARY KEY,
-    group_id  BIGINT       NOT NULL REFERENCES groups (id) ON DELETE CASCADE,
-    model     VARCHAR(128) NOT NULL,
-    enabled   BOOLEAN      NOT NULL DEFAULT TRUE,           -- 分组内是否可用
-    ratio     NUMERIC(10,4),                                -- 倍率覆盖，NULL = 用全局
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE UNIQUE INDEX uk_group_models ON group_models (group_id, model);
-
-ALTER TABLE users    ADD COLUMN group_id BIGINT REFERENCES groups (id);
-ALTER TABLE api_keys ADD COLUMN group_id BIGINT REFERENCES groups (id);
+-- 仅约束未删除记录，避免删除后同名分组无法重建
+CREATE UNIQUE INDEX idx_key_groups_name_active ON key_groups (name) WHERE deleted_at IS NULL;
 ```
 
-#### 3.6.3 Redis 计数键设计
+迁移同时预置 `default` 分组，使密钥表单开箱即有可选项。
 
-| 维度 | Key | 过期 |
-| --- | --- | --- |
-| 每分钟请求 | `wg:rl:{group}:rpm:{yyyyMMddHHmm}` | 120s |
-| 每日请求 | `wg:rl:{group}:rpd:{yyyyMMdd}` | 48h |
-| 并发 | `wg:rl:{group}:conc`（INCR / DECR，进程崩溃靠 TTL 兜底） | 300s |
-| 每日 token | `wg:rl:{group}:tok:{yyyyMMdd}` | 48h |
-
-计数与判定用单个 Lua 脚本完成，避免「先读后写」的竞态。
-
-#### 3.6.4 执行位置（硬约束）
+#### 3.6.3 执行位置（硬约束）
 
 ```
-鉴权 → 【分组解析】 → 【限流检查 + 预占】 → 额度预扣 → 路由选择 → 转发上游 → 结算 → 释放并发
+鉴权 → 【分组解析】 → 【限流：QPM + 并发】 → 额度预扣 → 路由选择 → 转发上游 → 结算 → 释放并发
 ```
 
-**限流必须在路由与转发之前**，理由有二：
+**限流必须在路由与转发之前**：放到转发之后，被拒请求已经消耗了上游调用与真金白银。
 
-1. 放到转发之后，被拒请求已经消耗了上游调用与真金白银；
-2. 排队（`queue`）策略要求请求在**进入上游之前**等待，否则排队毫无意义。
+#### 3.6.4 缓存与生效时延
 
-#### 3.6.5 分组级模型可用性
+分组表按 **60 秒进程内缓存**读取（与倍率表同策略）。
 
-- 路由阶段按 `group_models` 过滤：分组内 `enabled = false` 的模型视为「无可用渠道」，返回业务码 `40404`（模型不可用），并在文案中提示所属分组
-- 未在 `group_models` 中出现的模型沿用**全局可用性**（避免新建分组时需要逐条配置）
-- 倍率优先级：**`group_models.ratio` > `model_ratios` > `*` 兜底**
+**刻意不把分组策略折进 `KeyIdentity`**：密钥缓存最长 24 小时，
+折进去会让管理员调整分组倍率或限流后长时间不生效。
 
-#### 3.6.6 管理接口
+#### 3.6.5 管理接口
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/v1/admin/groups` | 分组列表（含成员数、限额、可用模型数、状态） |
-| POST | `/api/v1/admin/groups` | 新建分组 |
-| GET | `/api/v1/admin/groups/:id` | 分组详情（限额 + 模型配置） |
-| PUT | `/api/v1/admin/groups/:id` | 更新限额策略 |
-| DELETE | `/api/v1/admin/groups/:id` | 删除分组（内置 `default` 拒绝删除） |
-| GET | `/api/v1/admin/groups/:id/models` | 分组模型可用性列表 |
-| PUT | `/api/v1/admin/groups/:id/models` | 批量保存模型开关与倍率覆盖 |
-| PATCH | `/api/v1/admin/users/:id/group` | 调整用户所属分组 |
+| GET | `/api/v1/groups` | 启用中的分组（登录用户可读，供密钥表单选择并展示其策略） |
+| GET | `/api/v1/admin/groups` | 全部分组（含已禁用） |
+| POST | `/api/v1/admin/groups` | 新建分组；同名软删除记录会被恢复，避免标识被历史数据占用 |
+| PUT | `/api/v1/admin/groups/:id` | 更新策略与开关（标识是密钥的引用键，创建后不可修改） |
+| DELETE | `/api/v1/admin/groups/:id` | 删除分组；内置 `default` 拒绝删除 |
 
-响应仍走统一格式 `{code, message, data, trace_id, timestamp}`。
+新建 / 修改密钥时会校验分组标识存在，避免写入拼错的标识导致策略静默不生效；
+存量密钥不受影响，仍按中性策略运行。
+
+#### 3.6.6 尚未实现（后续可扩展）
+
+早期设计中还包含以下内容，本版未实现：
+
+- `group_models`：分组级模型可用性与**按模型**的倍率覆盖（当前只有统一系数）
+- RPM / 每日请求数 / 单日 token 上限，以及超限后的排队降级（当前只有 QPM 与并发）
+- `users.group_id` 用户级分组（当前分组只挂在密钥上，按密钥粒度已足够表达用途）
+- Redis Lua 原子化多维计数（当前复用既有的 QPM 滑动窗口与并发计数）
 
 ### 3.7 安全体系
 
@@ -483,6 +472,7 @@ ImageResponse { created, model, images[], usage }
 | 绑定 | `GET /api/v1/account/bindings`、Passkey 注册 begin/finish、GitHub authorize/callback |
 | 绘图 | `GET /api/v1/studio/models`、`GET /api/v1/studio/prompts`、`POST /api/v1/studio/images`、`GET /api/v1/studio/works`、`DELETE /api/v1/studio/works/:id`、`GET /api/v1/studio/works/:id/images/:index` |
 | 参数调试 | `GET /api/v1/playground/models`、`POST /api/v1/playground/params/preview` |
+| 分组 | `GET /api/v1/groups`（启用中的分组，供密钥表单选择） |
 | 系统 | `GET /api/v1/system/info`、`GET /api/v1/system/status`、`POST /api/v1/system/install` |
 
 ### 5.3 管理侧接口
@@ -491,7 +481,7 @@ ImageResponse { created, model, images[], usage }
 | --- | --- |
 | 用户 | `GET/POST /api/v1/admin/users`、`PATCH /users/:id/status`、`POST /users/:id/quota` |
 | 渠道 | `POST /admin/channels/detect`、`GET /admin/channels/model-catalog`、CRUD、`POST /:id/test` |
-| 分组（新增） | 见 3.6.6 |
+| 分组 | `GET/POST /admin/groups`、`PUT/DELETE /admin/groups/:id`（见 3.6.5） |
 | 倍率 | `GET/PUT /admin/model-ratios` |
 | 日志 | `GET /admin/logs`、`GET /admin/logs/export`、`GET /admin/audit-logs` |
 | 设置 | `GET/PUT /admin/settings`、`POST /admin/skills/scan` 等 |

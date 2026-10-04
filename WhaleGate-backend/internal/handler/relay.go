@@ -138,7 +138,7 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 	var reservation *service.Reservation
 	if !selfUse {
 		estimate := h.svc.EstimateUsage(req)
-		reservePoints, err := h.svc.PointsFor(ctx, req.Model, estimate)
+		reservePoints, err := h.svc.PointsFor(ctx, req.Model, estimate, h.groupMultiplier(c))
 		if err != nil {
 			h.reject(c, clientProtocol, req, start, selfUse, nil, err)
 			return
@@ -259,7 +259,7 @@ func (h *RelayHandler) settleAndLog(
 ) {
 	usage, confidence := resolveUsage(h.svc, req, outcome)
 
-	points, err := h.svc.PointsFor(c.Request.Context(), req.Model, usage)
+	points, err := h.svc.PointsFor(c.Request.Context(), req.Model, usage, h.groupMultiplier(c))
 	if err != nil {
 		points = 0
 		if h.svc.Logger != nil {
@@ -366,6 +366,18 @@ func currentKeyIdentity(c *gin.Context) *service.KeyIdentity {
 	}
 	idn, _ := v.(*service.KeyIdentity)
 	return idn
+}
+
+// groupMultiplier 取当前密钥所属分组的倍率系数；未分组或分组不可用时为 1。
+//
+// 按请求解析而不是折进 KeyIdentity：密钥缓存最长 24 小时，
+// 折进去会让管理员调整分组倍率后长时间不生效。
+func (h *RelayHandler) groupMultiplier(c *gin.Context) float64 {
+	idn := currentKeyIdentity(c)
+	if idn == nil {
+		return 1
+	}
+	return h.svc.GroupPolicyFor(c.Request.Context(), idn.GroupTag).RatioMultiplier
 }
 
 // relayOutcome 一次转发的结果摘要。

@@ -263,7 +263,16 @@ func (c *Container) RatioFor(ctx context.Context, modelName string) (float64, fl
 }
 
 // PointsFor 计算用量对应的点数：prompt + completion（含思维链）。
-func (c *Container) PointsFor(ctx context.Context, modelName string, usage *spec.Usage) (int64, error) {
+//
+// groupMultiplier 为所属分组的倍率系数，在模型倍率算出的点数上相乘：
+// 这样分组倍率与按模型的倍率保持正交，管理员只需给分组一个系数。
+// 未分组时传 1，行为与加分组功能之前完全一致。
+func (c *Container) PointsFor(
+	ctx context.Context,
+	modelName string,
+	usage *spec.Usage,
+	groupMultiplier float64,
+) (int64, error) {
 	if usage == nil {
 		return 0, nil
 	}
@@ -275,6 +284,10 @@ func (c *Container) PointsFor(ctx context.Context, modelName string, usage *spec
 		float64(usage.CompletionTokens)/1000*completionRatio
 	if points <= 0 {
 		return 0, nil
+	}
+	// 系数在取整前相乘，保证四舍五入只发生一次。
+	if groupMultiplier > 0 && groupMultiplier != 1 {
+		points *= groupMultiplier
 	}
 	return int64(math.Ceil(points)), nil
 }

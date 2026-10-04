@@ -27,6 +27,8 @@ const (
 	AuditUserStatus       = "user.status"
 	AuditRatioUpsert      = "ratio.upsert"
 	AuditRatioDelete      = "ratio.delete"
+	AuditGroupUpsert      = "group.upsert"
+	AuditGroupDelete      = "group.delete"
 	AuditCredentialImport = "credential.import"
 	AuditCredentialBind   = "credential.bind"
 	AuditCredentialDelete = "credential.delete"

@@ -87,6 +87,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '倍率配置', icon: 'PercentageOutlined', admin: true, group: '管理后台' },
       },
       {
+        path: 'admin/groups',
+        name: 'admin-groups',
+        component: () => import('@/views/admin/GroupsView.vue'),
+        meta: { title: '分组管理', icon: 'ClusterOutlined', admin: true, group: '管理后台' },
+      },
+      {
         path: 'admin/logs',
         name: 'admin-logs',
         component: () => import('@/views/admin/LogsView.vue'),

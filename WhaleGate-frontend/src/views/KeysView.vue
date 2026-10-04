@@ -4,6 +4,8 @@ import { CopyOutlined, DeleteOutlined, PlusOutlined, SettingOutlined, StopOutlin
 import { message, Modal } from 'ant-design-vue'
 import { apiKeyApi } from '@/api/apikey'
 import { channelApi } from '@/api/channel'
+import { groupApi } from '@/api/group'
+import type { KeyGroup } from '@/api/group'
 import { useUserStore } from '@/stores/user'
 import type { APIKeyItem, CreateKeyPayload, UpdateKeyPayload } from '@/api/types'
 
@@ -53,10 +55,40 @@ async function loadCatalog() {
   }
 }
 
+/** 可选分组：由管理员在「分组管理」中配置，决定倍率与限流 */
+const groupOptions = ref<KeyGroup[]>([])
+const groupsLoading = ref(false)
+
+async function loadGroups() {
+  groupsLoading.value = true
+  try {
+    groupOptions.value = await groupApi.options()
+  } catch {
+    groupOptions.value = []
+  } finally {
+    groupsLoading.value = false
+  }
+}
+
+/** 描述一个分组的生效策略，用于在表单里给出直观提示 */
+function groupPolicyText(group?: KeyGroup) {
+  if (!group) {
+    return '未指定分组时按默认策略运行：不加价，限流沿用全局默认。'
+  }
+  const parts = [`倍率 ×${group.ratio_multiplier}`]
+  parts.push(group.qpm > 0 ? `QPM ${group.qpm}` : 'QPM 沿用下级')
+  parts.push(group.concurrency > 0 ? `并发 ${group.concurrency}` : '并发沿用下级')
+  return parts.join(' ｜ ')
+}
+
+const selectedGroup = computed(() => groupOptions.value.find((g) => g.name === form.group_tag))
+
 function buildPayload() {
   const payload: CreateKeyPayload = { name: form.name.trim() || '默认密钥' }
-  if (form.group_tag.trim()) {
-    payload.group_tag = form.group_tag.trim()
+  // allow-clear 会把值置为 undefined，这里统一按空串处理
+  const groupTag = (form.group_tag ?? '').trim()
+  if (groupTag) {
+    payload.group_tag = groupTag
   }
   if (form.customEnabled && form.custom_key.trim()) {
     payload.custom_key = form.custom_key.trim()
@@ -86,6 +118,7 @@ function buildPayload() {
 const columns = [
   { title: '名称', dataIndex: 'name', key: 'name' },
   { title: '密钥（打码）', dataIndex: 'masked_key', key: 'masked_key' },
+  { title: '分组', dataIndex: 'group_tag', key: 'group_tag', width: 110 },
   { title: '状态', dataIndex: 'status', key: 'status' },
   { title: '创建时间', dataIndex: 'created_at', key: 'created_at' },
   { title: '最近使用', dataIndex: 'last_used_at', key: 'last_used_at' },
@@ -138,6 +171,7 @@ function openCreate() {
   })
   createOpen.value = true
   void loadCatalog()
+  void loadGroups()
 }
 
 async function submitCreate() {
@@ -254,12 +288,22 @@ function openEdit(record: APIKeyItem) {
   editForm.allowed_models = parseJSONList(record.allowed_models)
   editForm.reset_usage = false
   editOpen.value = true
+  void loadGroups()
 }
+
+/**
+ * 编辑中的密钥其分组标识已不在配置里：
+ * 可能是历史自由文本标签，也可能是分组已被删除。
+ * 这类密钥当前按默认策略运行，但保存时会被后端拒绝，需要先重新选择。
+ */
+const editGroupMissing = computed(
+  () => !!editForm.group_tag && !groupOptions.value.some((g) => g.name === editForm.group_tag),
+)
 
 function buildUpdatePayload(): UpdateKeyPayload {
   const payload: UpdateKeyPayload = {
     name: editForm.name.trim() || '默认密钥',
-    group_tag: editForm.group_tag.trim(),
+    group_tag: (editForm.group_tag ?? '').trim(),
     status: editForm.status,
     qpm: editForm.qpm,
     concurrency: editForm.concurrency,
@@ -356,7 +400,7 @@ onMounted(load)
         :data-source="items"
         :loading="loading"
         row-key="id"
-        :scroll="{ x: 1040 }"
+        :scroll="{ x: 1150 }"
         :pagination="{
           current: pagination.current,
           pageSize: pagination.pageSize,
@@ -371,6 +415,12 @@ onMounted(load)
             <a-tooltip title="仅用于辨认是哪一个密钥，不能用于调用。完整明文只在创建时展示一次。">
               <code>{{ (record as APIKeyItem).masked_key }}</code>
             </a-tooltip>
+          </template>
+          <template v-else-if="column.key === 'group_tag'">
+            <a-tag v-if="(record as APIKeyItem).group_tag" color="blue">
+              {{ (record as APIKeyItem).group_tag }}
+            </a-tag>
+            <span v-else class="wg-muted">默认</span>
           </template>
           <template v-else-if="column.key === 'status'">
             <a-tag :color="statusText(record as APIKeyItem).color">
@@ -428,7 +478,16 @@ onMounted(load)
           </a-form-item>
 
           <a-form-item label="分组">
-            <a-input v-model:value="form.group_tag" placeholder="选填，例如：生产 / 测试，便于分类管理" allow-clear />
+            <a-select
+              v-model:value="form.group_tag"
+              :options="groupOptions.map((g) => ({ value: g.name, label: `${g.display_name}（${g.name}）` }))"
+              :loading="groupsLoading"
+              placeholder="不指定则按默认策略运行"
+              allow-clear
+              show-search
+              option-filter-prop="label"
+            />
+            <div class="wg-field-hint">{{ groupPolicyText(selectedGroup) }}</div>
           </a-form-item>
 
           <div class="wg-opt">
@@ -575,7 +634,23 @@ onMounted(load)
         </a-form-item>
 
         <a-form-item label="分组">
-          <a-input v-model:value="editForm.group_tag" placeholder="选填，例如：生产 / 测试" allow-clear />
+          <a-select
+            v-model:value="editForm.group_tag"
+            :options="groupOptions.map((g) => ({ value: g.name, label: `${g.display_name}（${g.name}）` }))"
+            :loading="groupsLoading"
+            placeholder="不指定则按默认策略运行"
+            allow-clear
+            show-search
+            option-filter-prop="label"
+          />
+          <a-alert
+            v-if="editGroupMissing"
+            type="warning"
+            show-icon
+            style="margin-top: 8px"
+            message="该分组已不存在"
+            :description="`「${editForm.group_tag}」可能是历史标签或分组已被删除，当前按默认策略运行。保存前请重新选择分组，或清空该项。`"
+          />
         </a-form-item>
 
         <a-divider orientation="left">速率与额度</a-divider>
@@ -656,6 +731,13 @@ onMounted(load)
 </template>
 
 <style scoped>
+.wg-field-hint {
+  margin-top: 4px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .wg-stat-desc {
   font-size: 12px;
   color: rgba(0, 0, 0, 0.45);

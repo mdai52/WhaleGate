@@ -16,6 +16,9 @@ import (
 )
 
 // RateLimit 按 API Key 维度做 QPM 滑动窗口限流与并发控制。
+//
+// 生效上限按「密钥级 > 分组级 > 全局默认」逐层回落：
+// 密钥上配了就用密钥的，没配则继承所属分组的，分组也没配才用全局默认。
 // 缓存故障时不阻断请求，仅记录告警日志，保证可用性优先。
 func RateLimit(svc *service.Container) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -25,10 +28,9 @@ func RateLimit(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 
-		qpm := idn.QPM
-		if qpm <= 0 {
-			qpm = svc.Config.Gateway.DefaultQPM
-		}
+		policy := svc.GroupPolicyFor(c.Request.Context(), idn.GroupTag)
+
+		qpm := effectiveLimit(idn.QPM, policy.QPM, svc.Config.Gateway.DefaultQPM)
 		if res, err := svc.Limiter.Allow(c.Request.Context(),
 			fmt.Sprintf("key:%d", idn.KeyID), qpm, time.Minute); err != nil {
 			logLimiterError(svc, err)
@@ -41,10 +43,7 @@ func RateLimit(svc *service.Container) gin.HandlerFunc {
 			return
 		}
 
-		conc := idn.Concurrency
-		if conc <= 0 {
-			conc = svc.Config.Gateway.DefaultConcurrency
-		}
+		conc := effectiveLimit(idn.Concurrency, policy.Concurrency, svc.Config.Gateway.DefaultConcurrency)
 		release, err := svc.Limiter.Acquire(c.Request.Context(),
 			fmt.Sprintf("key:%d", idn.KeyID), conc, 5*time.Minute)
 		if err != nil {
@@ -85,4 +84,16 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// effectiveLimit 按「密钥级 > 分组级 > 全局默认」取生效上限。
+// 每一层的 0 都表示"该层不设限"，因此逐层回落。
+func effectiveLimit(keyValue, groupValue, fallback int) int {
+	if keyValue > 0 {
+		return keyValue
+	}
+	if groupValue > 0 {
+		return groupValue
+	}
+	return fallback
 }

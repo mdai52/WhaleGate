@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ApiOutlined,
   BookOutlined,
+  ClusterOutlined,
   DashboardOutlined,
   ExperimentOutlined,
   FileSearchOutlined,
@@ -60,6 +61,7 @@ const menus = computed<MenuItem[]>(() => {
       { key: '/admin/users', label: '用户管理', icon: 'TeamOutlined', group: '管理后台' },
       { key: '/admin/channels', label: '渠道管理', icon: 'ApiOutlined', group: '管理后台' },
       { key: '/admin/ratios', label: '倍率配置', icon: 'PercentageOutlined', group: '管理后台' },
+      { key: '/admin/groups', label: '分组管理', icon: 'ClusterOutlined', group: '管理后台' },
       { key: '/admin/logs', label: '全局日志', icon: 'FileSearchOutlined', group: '管理后台' },
       { key: '/admin/oauth', label: 'OAuth 登录', icon: 'SafetyCertificateOutlined', group: '凭证' },
       { key: '/admin/credentials', label: '认证文件', icon: 'IdcardOutlined', group: '凭证' },
@@ -87,6 +89,7 @@ const menuGroups = computed(() => {
 const iconMap: Record<string, unknown> = {
   ApiOutlined,
   BookOutlined,
+  ClusterOutlined,
   DashboardOutlined,
   ExperimentOutlined,
   FileSearchOutlined,

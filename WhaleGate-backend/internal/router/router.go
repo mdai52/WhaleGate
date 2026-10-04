@@ -89,6 +89,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 	account := handler.NewAccountHandler(d.Svc)
 	studio := handler.NewStudioHandler(d.Svc)
 	playground := handler.NewPlaygroundHandler(d.Svc)
+	group := handler.NewGroupHandler(d.Svc)
 
 	pub := e.Group("/api/v1/auth")
 	// 认证接口按 IP 限流 + 登录失败锁定（见 service.Login）
@@ -162,6 +163,9 @@ func registerAPI(e *gin.Engine, d Deps) {
 			playgroundGroup.GET("/models", playground.Models)
 			playgroundGroup.POST("/params/preview", playground.Preview)
 		}
+
+		// 分组选项：创建密钥时需要选择分组，因此对登录用户开放只读接口
+		authed.GET("/groups", group.Options)
 	}
 
 	adminGroup := e.Group("/api/v1/admin")
@@ -214,6 +218,15 @@ func registerAPI(e *gin.Engine, d Deps) {
 			ratios.GET("", admin.ListRatios)
 			ratios.POST("", admin.UpsertRatio)
 			ratios.DELETE("/:id", admin.DeleteRatio)
+		}
+
+		// 分组管理：把倍率系数与 QPM / 并发打包成预设供密钥选用
+		groups := adminGroup.Group("/groups")
+		{
+			groups.GET("", group.List)
+			groups.POST("", group.Create)
+			groups.PUT("/:id", group.Update)
+			groups.DELETE("/:id", group.Delete)
 		}
 
 		adminGroup.GET("/logs", admin.ListLogs)

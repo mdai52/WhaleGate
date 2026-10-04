@@ -17,6 +17,7 @@
 | `channels` | 上游渠道表：上游密钥与注入参数加密存储 |
 | `credentials` | OAuth 凭证表（认证文件）：令牌加密存储 |
 | `model_ratios` | 模型倍率表：点 / 1K tokens，`*` 为兜底 |
+| `key_groups` | API Key 分组：倍率系数与 QPM / 并发上限的预设 |
 | `call_logs` | 调用日志表：模型、渠道、耗时、token、点数、置信度 |
 | `user_identities` | 第三方身份绑定表（GitHub 等） |
 | `webauthn_credentials` | 通行密钥（WebAuthn）凭证表 |
@@ -110,6 +111,29 @@
 | last_error | text | 最近错误 |
 | file_name | varchar(256) | 导入的认证文件原始文件名 |
 | created_at / updated_at / deleted_at | timestamptz | 时间戳与软删除 |
+
+## key_groups · API Key 分组
+
+把倍率与限流策略打包成预设，供密钥创建时选用。密钥上记录的是分组标识（`api_keys.group_tag`）。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | bigserial | 主键 |
+| name | varchar(64) | 分组标识，密钥上记录的就是它；仅未删除记录唯一 |
+| display_name | varchar(64) | 展示名，留空时回落到标识 |
+| description | varchar(255) | 说明 |
+| ratio_multiplier | double precision | 倍率系数：在模型倍率算出的点数上相乘，1 = 不加价 |
+| qpm | integer | 分组级每分钟请求上限，0 = 该层不设限 |
+| concurrency | integer | 分组级并发上限，0 = 该层不设限 |
+| enabled | boolean | 是否启用；禁用后其下密钥回落中性策略 |
+| created_at / updated_at | timestamptz | 时间戳 |
+| deleted_at | timestamptz | 软删除；删除后同名可重建 |
+
+**生效规则**：限流按「密钥级 > 分组级 > 全局默认」逐层回落；
+倍率为相乘关系。未匹配到分组（历史自由文本标签、分组被删除或禁用）时按中性策略运行，
+即系数 1、不额外限流。
+
+**预置数据**：迁移会写入 `default`（默认分组，系数 1），该分组不允许删除。
 
 ## model_ratios · 模型倍率
 
