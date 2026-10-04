@@ -204,16 +204,27 @@ load()
           <template v-else-if="column.key === 'action'">
             <a-space>
               <a-button size="small" @click="openEdit(record as RatioOverviewItem)">编辑</a-button>
-              <a-button
-                v-if="(record as RatioOverviewItem).custom"
-                size="small"
-                danger
-                type="text"
-                @click="resetToDefault(record as RatioOverviewItem)"
+              <a-tooltip
+                :title="
+                  (record as RatioOverviewItem).custom
+                    ? '清除该模型的自定义倍率，恢复按兜底倍率计费'
+                    : '该模型由渠道提供且未单独配置倍率，没有可删除的自定义项；如需改价请点「编辑」'
+                "
               >
-                <ReloadOutlined />
-                恢复默认
-              </a-button>
+                <!-- 禁用按钮不会触发原生事件，需要外层 span 让 Tooltip 生效 -->
+                <span>
+                  <a-button
+                    size="small"
+                    danger
+                    type="text"
+                    :disabled="!(record as RatioOverviewItem).custom"
+                    @click="resetToDefault(record as RatioOverviewItem)"
+                  >
+                    <ReloadOutlined />
+                    恢复默认
+                  </a-button>
+                </span>
+              </a-tooltip>
             </a-space>
           </template>
         </template>
