@@ -288,6 +288,24 @@ export interface ModelRatio {
   updated_at: string
 }
 
+/**
+ * 倍率配置总览项：以渠道模型为基准，回显当前生效倍率。
+ *
+ * `custom` 为 false 表示该模型没有单独配置，数值是继承来的兜底倍率；
+ * 直接编辑即可落库为自定义配置。
+ */
+export interface RatioOverviewItem {
+  model: string
+  prompt_ratio: number
+  completion_ratio: number
+  custom: boolean
+  /** 单独配置的主键；继承项为 0 */
+  id: number
+  enabled: boolean
+  /** 提供该模型的渠道名 */
+  channels: string[]
+}
+
 /** 调用状态：1 成功 / 2 失败 */
 export type CallStatus = 1 | 2
 

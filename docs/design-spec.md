@@ -482,7 +482,7 @@ ImageResponse { created, model, images[], usage }
 | 用户 | `GET/POST /api/v1/admin/users`、`PATCH /users/:id/status`、`POST /users/:id/quota` |
 | 渠道 | `POST /admin/channels/detect`、`GET /admin/channels/model-catalog`、CRUD、`POST /:id/test` |
 | 分组 | `GET/POST /admin/groups`、`PUT/DELETE /admin/groups/:id`（见 3.6.5） |
-| 倍率 | `GET/PUT /admin/model-ratios` |
+| 倍率 | `GET /admin/ratios`（总览：渠道模型 ∪ 倍率表，含继承项）、`POST /admin/ratios`（新增 / 更新）、`DELETE /admin/ratios/:id` |
 | 日志 | `GET /admin/logs`、`GET /admin/logs/export`、`GET /admin/audit-logs` |
 | 设置 | `GET/PUT /admin/settings`、`POST /admin/skills/scan` 等 |
 | 工具 | MCP 服务 CRUD、`POST /admin/mcp/:id/connect`、`GET /admin/mcp/tools`、`POST /admin/mcp/tools/call` |
@@ -562,7 +562,7 @@ ReserveQuota(预估点数) ──► 上游调用 ──► Settle(真实点数)
         ├── 用户管理   创建、启停、按元调整额度（1 元 = 1000 点）
         ├── 渠道管理   增删改查、连通性测试、自动探测模型、别名 / 注入 / 能力声明
         ├── 分组管理   分组列表 + 分组详情（限流策略 + 模型可用性与倍率覆盖）★新增
-        ├── 倍率配置   点 / 1K tokens 增删改查，`*` 兜底
+        ├── 倍率配置   以渠道模型为基准的倍率总览，未配置项回显兜底倍率，可编辑 / 恢复默认
         ├── 全局日志   多维检索、参数应用与丢弃明细、CSV 导出
         ├── 凭证       OAuth 认证文件导入 / 导出 / 配额
         ├── 工具       MCP 服务、技能管理

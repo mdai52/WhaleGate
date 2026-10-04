@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -325,21 +326,6 @@ func (c *Container) invalidateRatioCache() {
 
 // ---------------------------------------------------------------- 倍率 CRUD
 
-// ListRatios 分页查询倍率。
-func (c *Container) ListRatios(ctx context.Context, page, pageSize int) ([]model.ModelRatio, int64, error) {
-	page, pageSize = normalizePage(page, pageSize)
-	q := c.DB.WithContext(ctx).Model(&model.ModelRatio{})
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		return nil, 0, apierr.Wrap(apierr.ErrDatabase, err)
-	}
-	var list []model.ModelRatio
-	if err := q.Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
-		return nil, 0, apierr.Wrap(apierr.ErrDatabase, err)
-	}
-	return list, total, nil
-}
-
 // UpsertRatio 新增或更新倍率。
 func (c *Container) UpsertRatio(ctx context.Context, r *model.ModelRatio) (*model.ModelRatio, error) {
 	if r.Model == "" {
@@ -387,6 +373,118 @@ func (c *Container) DeleteRatio(ctx context.Context, id uint) error {
 	}
 	c.invalidateRatioCache()
 	return nil
+}
+
+// RatioOverviewItem 倍率配置总览项：渠道里出现的模型 + 其当前生效倍率。
+type RatioOverviewItem struct {
+	// Model 模型名；"*" 为兜底项。
+	Model string `json:"model"`
+	// PromptRatio / CompletionRatio 当前生效倍率（点 / 1K tokens）。
+	PromptRatio     float64 `json:"prompt_ratio"`
+	CompletionRatio float64 `json:"completion_ratio"`
+	// Custom 是否已单独配置；false 表示继承兜底倍率。
+	Custom bool `json:"custom"`
+	// ID 单独配置的主键；继承项为 0，前端据此判断能否移除。
+	ID uint `json:"id"`
+	// Enabled 仅对单独配置项有意义：停用后该模型回到兜底计费。
+	Enabled bool `json:"enabled"`
+	// Channels 提供该模型的渠道名，便于核对来源。
+	Channels []string `json:"channels"`
+}
+
+// RatioOverview 以渠道模型为基准汇总倍率配置。
+//
+// 倍率表原本只列出管理员手工添加过的模型，渠道里跑着的模型往往一条都没有，
+// 于是「这个模型到底按什么价计费」只能靠猜。这里把两类来源合并：
+//
+//   - 全部启用渠道对外暴露的模型（用户实际能调用的）
+//   - 倍率表里已有的条目（含兜底 * 与已停用项）
+//
+// 未单独配置的模型回显兜底倍率并标记 Custom=false，
+// 管理员直接编辑即可落库为自定义配置。
+func (c *Container) RatioOverview(ctx context.Context) ([]RatioOverviewItem, error) {
+	var rows []model.ModelRatio
+	if err := c.DB.WithContext(ctx).Find(&rows).Error; err != nil {
+		return nil, apierr.Wrap(apierr.ErrDatabase, err)
+	}
+	byModel := make(map[string]model.ModelRatio, len(rows))
+	for _, r := range rows {
+		byModel[r.Model] = r
+	}
+
+	// 兜底倍率：已启用的 * 行优先，否则回落到配置默认值。
+	// 与 RatioFor 的取值顺序保持一致，避免页面显示与实际计费不符。
+	fallbackPrompt := c.Config.Gateway.DefaultPromptRatio
+	fallbackCompletion := c.Config.Gateway.DefaultCompletionRatio
+	if star, ok := byModel[ratioWildcard]; ok && star.Enabled {
+		fallbackPrompt, fallbackCompletion = star.PromptRatio, star.CompletionRatio
+	}
+
+	channels, err := c.EnabledChannels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	channelOf := make(map[string][]string)
+	for _, ch := range channels {
+		for _, name := range ch.ExposedModels() {
+			channelOf[name] = append(channelOf[name], ch.Name)
+		}
+	}
+
+	build := func(name string) RatioOverviewItem {
+		item := RatioOverviewItem{
+			Model:           name,
+			PromptRatio:     fallbackPrompt,
+			CompletionRatio: fallbackCompletion,
+			// 无渠道归属（如兜底项）时给出空数组，避免前端拿到 null
+			Channels: append([]string{}, channelOf[name]...),
+		}
+		if r, ok := byModel[name]; ok {
+			item.ID = r.ID
+			item.Enabled = r.Enabled
+			item.Custom = true
+			item.PromptRatio = r.PromptRatio
+			item.CompletionRatio = r.CompletionRatio
+		}
+		return item
+	}
+
+	out := make([]RatioOverviewItem, 0, len(byModel)+len(channelOf))
+	seen := make(map[string]struct{}, cap(out))
+	add := func(name string) {
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		out = append(out, build(name))
+	}
+
+	// 兜底项固定排最前，其余按模型名升序，保证页面顺序稳定
+	if _, ok := byModel[ratioWildcard]; ok {
+		add(ratioWildcard)
+	}
+	names := make([]string, 0, len(channelOf))
+	for name := range channelOf {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		add(name)
+	}
+
+	// 仅存在于倍率表、当前没有渠道提供的模型也一并列出：
+	// 否则管理员配过的倍率会因为渠道调整而从页面上"消失"，无从清理。
+	rest := make([]string, 0, len(byModel))
+	for name := range byModel {
+		if _, ok := seen[name]; !ok {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	for _, name := range rest {
+		add(name)
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------- 估算

@@ -117,15 +117,17 @@ func (h *AdminHandler) ChangeQuota(c *gin.Context) {
 	response.OK(c, user)
 }
 
-// ListRatios 分页查询模型倍率。
+// ListRatios 查询倍率配置总览：渠道里出现的模型 + 当前生效倍率。
+//
+// 不分页：列表以「启用渠道暴露的模型」为基准，规模与渠道模型数同量级，
+// 前端自带的表格分页足够。
 func (h *AdminHandler) ListRatios(c *gin.Context) {
-	p := ParsePage(c)
-	list, total, err := h.svc.ListRatios(c.Request.Context(), p.Page, p.PageSize)
+	items, err := h.svc.RatioOverview(c.Request.Context())
 	if err != nil {
 		response.Fail(c, err)
 		return
 	}
-	response.Page(c, list, total, p.Page, p.PageSize)
+	response.OK(c, items)
 }
 
 // UpsertRatio 新增或更新模型倍率。

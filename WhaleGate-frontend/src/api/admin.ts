@@ -1,5 +1,12 @@
 import { request } from './http'
-import type { CallLog, ModelRatio, Paged, RegisterPayload, UserProfile } from './types'
+import type {
+  CallLog,
+  ModelRatio,
+  Paged,
+  RatioOverviewItem,
+  RegisterPayload,
+  UserProfile,
+} from './types'
 
 export const adminApi = {
   listUsers(params: { page?: number; page_size?: number; keyword?: string } = {}) {
@@ -22,8 +29,9 @@ export const adminApi = {
       data: { delta },
     })
   },
-  listRatios(params: { page?: number; page_size?: number } = {}) {
-    return request<Paged<ModelRatio>>({ url: '/admin/ratios', method: 'GET', params })
+  /** 倍率配置总览：渠道里出现的模型 + 当前生效倍率（不分页） */
+  listRatios() {
+    return request<RatioOverviewItem[]>({ url: '/admin/ratios', method: 'GET' })
   },
   upsertRatio(payload: Partial<ModelRatio> & { model: string }) {
     return request<ModelRatio>({ url: '/admin/ratios', method: 'POST', data: payload })
