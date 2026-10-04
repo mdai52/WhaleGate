@@ -24,7 +24,44 @@ const settings = reactive<Settings>({
   passkey_enabled: true,
   passkey_rp_id: '',
   passkey_rp_origins: '',
+  studio_storage_driver: 'local',
+  studio_local_root: '',
+  studio_local_base_url: '',
+  studio_s3_endpoint: '',
+  studio_s3_region: '',
+  studio_s3_bucket: '',
+  studio_s3_prefix: '',
+  studio_s3_access_key: '',
+  studio_s3_secret_key: '',
+  studio_s3_secret_key_set: false,
+  studio_s3_public_base_url: '',
+  studio_s3_force_path_style: false,
 })
+
+// 对象存储密钥为敏感字段，仅在编辑时暂存，绝不回填展示。
+const s3SecretInput = ref('')
+const storageSaving = ref(false)
+
+/** 保存绘图存储配置：始终提交完整设置，避免清空其它分组的配置。 */
+async function saveStorage() {
+  storageSaving.value = true
+  const snapshot = { ...settings }
+  try {
+    const res = await settingsApi.update({
+      ...settings,
+      // 密钥留空表示沿用已保存的值，不覆盖。
+      ...(s3SecretInput.value ? { studio_s3_secret_key: s3SecretInput.value } : {}),
+    })
+    Object.assign(settings, res)
+    s3SecretInput.value = ''
+    message.success('绘图存储配置已保存，立即生效；切换前产生的作品仍从原存储读取')
+  } catch {
+    Object.assign(settings, snapshot)
+    message.error('保存失败，请检查存储配置是否完整')
+  } finally {
+    storageSaving.value = false
+  }
+}
 
 // 私钥为敏感字段，仅在编辑时暂存，绝不回填展示。
 const tlsKeyInput = ref('')
@@ -274,6 +311,134 @@ onMounted(load)
         passkey_rp_origins: settings.passkey_rp_origins,
       }, '通行密钥配置已保存')">
         保存通行密钥配置
+      </a-button>
+    </a-card>
+
+    <a-card title="绘图工作台存储" :loading="loading" style="margin-top: 16px">
+      <template #extra>
+        <a-tag :color="settings.studio_storage_driver === 's3' ? 'blue' : 'green'">
+          {{ settings.studio_storage_driver === 's3' ? '对象存储' : '本地磁盘' }}
+        </a-tag>
+      </template>
+
+      <a-alert
+        type="info"
+        show-icon
+        style="margin-bottom: 16px"
+        message="生成图片的存放位置"
+        description="上游返回的图片链接通常几小时后就会失效，因此会统一转存到这里，保证作品库长期可回看。切换存储后，此前生成的作品仍从原来的存储读取。修改后立即生效，无需重启。"
+      />
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">存储后端</div>
+          <div class="wg-muted">单机部署用本地磁盘；多实例或容器化部署请改用对象存储</div>
+        </div>
+        <a-radio-group v-model:value="settings.studio_storage_driver" button-style="solid">
+          <a-radio-button value="local">本地磁盘</a-radio-button>
+          <a-radio-button value="s3">对象存储</a-radio-button>
+        </a-radio-group>
+      </div>
+
+      <a-divider style="margin: 12px 0" />
+
+      <a-form layout="vertical" style="max-width: 640px">
+        <template v-if="settings.studio_storage_driver === 'local'">
+          <a-form-item
+            label="存储目录"
+            extra="留空则使用配置文件中的 studio.data_dir（默认 ./data/studio）"
+          >
+            <a-input
+              v-model:value="settings.studio_local_root"
+              placeholder="./data/studio"
+              allow-clear
+            />
+          </a-form-item>
+          <a-form-item
+            label="公开访问前缀（可选）"
+            extra="该目录若已由 Nginx 等直接以静态资源对外服务，填写后图片可免鉴权直连，不再占用网关带宽"
+          >
+            <a-input
+              v-model:value="settings.studio_local_base_url"
+              placeholder="https://static.example.com/studio"
+              allow-clear
+            />
+          </a-form-item>
+        </template>
+
+        <template v-else>
+          <a-form-item label="服务地址" required extra="需带协议，如 https://s3.us-east-1.amazonaws.com">
+            <a-input
+              v-model:value="settings.studio_s3_endpoint"
+              placeholder="https://s3.us-east-1.amazonaws.com"
+              allow-clear
+            />
+          </a-form-item>
+          <a-row :gutter="12">
+            <a-col :xs="24" :md="12">
+              <a-form-item label="桶名" required>
+                <a-input v-model:value="settings.studio_s3_bucket" placeholder="whalegate" allow-clear />
+              </a-form-item>
+            </a-col>
+            <a-col :xs="24" :md="12">
+              <a-form-item label="区域" extra="自建 MinIO 可留空">
+                <a-input v-model:value="settings.studio_s3_region" placeholder="us-east-1" allow-clear />
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-row :gutter="12">
+            <a-col :xs="24" :md="12">
+              <a-form-item label="访问密钥 ID" required>
+                <a-input
+                  v-model:value="settings.studio_s3_access_key"
+                  placeholder="AKIA..."
+                  allow-clear
+                />
+              </a-form-item>
+            </a-col>
+            <a-col :xs="24" :md="12">
+              <a-form-item
+                :label="settings.studio_s3_secret_key_set ? '访问密钥（已配置，留空则保持不变）' : '访问密钥'"
+                required
+              >
+                <a-input-password
+                  v-model:value="s3SecretInput"
+                  placeholder="密钥仅在保存时上传，不会回传到浏览器"
+                  allow-clear
+                />
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-form-item label="对象键前缀" extra="便于与其它业务共用同一个桶，可留空">
+            <a-input v-model:value="settings.studio_s3_prefix" placeholder="studio" allow-clear />
+          </a-form-item>
+          <a-form-item
+            label="公开访问前缀（可选）"
+            extra="桶的公开域名或 CDN 域名；填写后图片可免鉴权直连，留空则经网关鉴权后回读"
+          >
+            <a-input
+              v-model:value="settings.studio_s3_public_base_url"
+              placeholder="https://cdn.example.com/whalegate"
+              allow-clear
+            />
+          </a-form-item>
+          <div class="wg-switch-row">
+            <div>
+              <div class="wg-switch-title">路径风格寻址</div>
+              <div class="wg-muted">自建 MinIO 与部分国内厂商需要开启；AWS S3、Cloudflare R2 请关闭</div>
+            </div>
+            <a-switch
+              v-model:checked="settings.studio_s3_force_path_style"
+              checked-children="开"
+              un-checked-children="关"
+            />
+          </div>
+        </template>
+      </a-form>
+
+      <a-divider style="margin: 12px 0" />
+      <a-button type="primary" :loading="storageSaving" @click="saveStorage">
+        保存存储配置
       </a-button>
     </a-card>
 

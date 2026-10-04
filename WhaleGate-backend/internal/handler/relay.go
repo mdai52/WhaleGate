@@ -133,19 +133,19 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 	ctx := c.Request.Context()
 	userID := CurrentUserID(c)
 	selfUse := h.svc.SelfUseMode()
+	start := time.Now()
 
 	var reservation *service.Reservation
 	if !selfUse {
 		estimate := h.svc.EstimateUsage(req)
 		reservePoints, err := h.svc.PointsFor(ctx, req.Model, estimate)
 		if err != nil {
-			writeRelayError(c, clientProtocol, err)
+			h.reject(c, clientProtocol, req, start, selfUse, nil, err)
 			return
 		}
 		reservation, err = h.svc.ReserveQuota(ctx, userID, reservePoints)
 		if err != nil {
-			reservation = nil
-			writeRelayError(c, clientProtocol, err)
+			h.reject(c, clientProtocol, req, start, selfUse, nil, err)
 			return
 		}
 	}
@@ -156,18 +156,17 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 	// 密钥级策略：模型白名单与额度限制
 	if idn := currentKeyIdentity(c); idn != nil {
 		if !idn.ModelAllowed(req.Model) {
-			writeRelayError(c, clientProtocol,
+			h.reject(c, clientProtocol, req, start, selfUse, reservation,
 				apierr.New(apierr.ErrForbidden, "该 API Key 无权调用模型 "+req.Model))
 			return
 		}
 		if idn.QuotaExceeded() {
-			writeRelayError(c, clientProtocol,
+			h.reject(c, clientProtocol, req, start, selfUse, reservation,
 				apierr.New(apierr.ErrQuotaExceeded, "该 API Key 的额度已用尽"))
 			return
 		}
 	}
 
-	start := time.Now()
 	attempts := 1 + h.svc.Config.Gateway.MaxRetries
 	exclude := make(map[uint]struct{}, attempts)
 
@@ -218,6 +217,28 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 	h.settleAndLog(c, clientProtocol, req, nil, nil, reservation, start,
 		model.CallStatusFailed, 0, apierr.CodeOf(lastErr), errorMessage(lastErr), selfUse, toolRounds)
 	writeRelayError(c, clientProtocol, lastErr)
+}
+
+// reject 记录一次「进入转发前就被拒绝」的请求：回补预扣、落调用日志并回写错误。
+//
+// 余额不足、密钥无权调用模型、密钥额度用尽这类拒绝如果不留痕，
+// 用户在调用历史里查不到被拒原因，只能看到一个空列表。
+func (h *RelayHandler) reject(
+	c *gin.Context,
+	clientProtocol string,
+	req *gateway.UnifiedRequest,
+	start time.Time,
+	selfUse bool,
+	reservation *service.Reservation,
+	err error,
+) {
+	if reservation != nil {
+		reservation.Release(c.Request.Context())
+	}
+	h.settleAndLog(c, clientProtocol, req, nil, nil, nil, start,
+		model.CallStatusFailed, apierr.From(err).HTTP, apierr.CodeOf(err),
+		errorMessage(err), selfUse, 0)
+	writeRelayError(c, clientProtocol, err)
 }
 
 // settleAndLog 结算额度并异步落调用日志。

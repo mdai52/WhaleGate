@@ -42,9 +42,15 @@ func (h *OAuthHandler) Start(c *gin.Context) {
 	var req startRequest
 	_ = c.ShouldBindJSON(&req)
 
-	// redirect_uri 为空时回退到配置的前端地址，避免授权 URL 缺少该必需参数
+	// redirect_uri 优先级：供应商配置 > 前端传入 > 前端基础地址。
+	// 供应商配置优先是因为该地址必须与 OAuth 应用中登记的回调地址完全一致，
+	// 自建客户端（如自己的 Google Cloud 项目）时只能由管理员显式指定；
+	// 全部为空时回退到前端地址，避免授权 URL 缺少该必需参数
 	// （Google 等会直接报 Missing required parameter: redirect_uri）。
-	redirectURI := req.RedirectURI
+	redirectURI := strings.TrimRight(strings.TrimSpace(provider.RedirectURI), "/")
+	if redirectURI == "" {
+		redirectURI = strings.TrimRight(strings.TrimSpace(req.RedirectURI), "/")
+	}
 	if redirectURI == "" {
 		redirectURI = strings.TrimRight(h.svc.Config.Auth.FrontendBase, "/")
 	}

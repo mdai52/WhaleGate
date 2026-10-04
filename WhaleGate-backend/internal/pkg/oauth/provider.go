@@ -125,34 +125,68 @@ func init() {
 	})
 }
 
-// LoadFromConfig 把配置文件中声明的供应商注册进来；ID 相同则覆盖内置定义。
+// LoadFromConfig 把配置文件中声明的供应商注册进来。
+//
+// ID 与内置定义相同时做**字段级覆盖**：以内置定义打底，只替换配置中显式填写的字段。
+// 这样接入自建 OAuth 客户端（例如用自己的 Google Cloud 项目登录 Gemini）时，
+// 只需写 client_id / client_secret / redirect_uri，不必重复抄写端点与 scopes。
 func LoadFromConfig(items []config.OAuthProviderConfig) {
 	for _, item := range items {
-		if item.ID == "" || item.TokenURL == "" {
+		if item.ID == "" {
 			continue
 		}
-		flow := Flow(item.Flow)
-		if flow != FlowDeviceCode {
-			flow = FlowAuthorizationCode
+		base := &Provider{}
+		if existing, ok := Get(item.ID); ok {
+			clone := *existing
+			base = &clone
 		}
-		body := TokenBodyFormat(item.TokenBodyFormat)
-		if body != BodyJSON {
-			body = BodyForm
+
+		if item.Name != "" {
+			base.Name = item.Name
 		}
-		register(&Provider{
-			ID:            item.ID,
-			Name:          item.Name,
-			Description:   item.Description,
-			Flow:          flow,
-			AuthURL:       item.AuthURL,
-			TokenURL:      item.TokenURL,
-			DeviceAuthURL: item.DeviceAuthURL,
-			RedirectURI:   item.RedirectURI,
-			ClientID:      item.ClientID,
-			Scopes:        item.Scopes,
-			UsesPKCE:      true,
-			TokenBody:     body,
-		})
+		if item.Description != "" {
+			base.Description = item.Description
+		}
+		if item.AuthURL != "" {
+			base.AuthURL = item.AuthURL
+		}
+		if item.TokenURL != "" {
+			base.TokenURL = item.TokenURL
+		}
+		if item.DeviceAuthURL != "" {
+			base.DeviceAuthURL = item.DeviceAuthURL
+		}
+		if item.RedirectURI != "" {
+			base.RedirectURI = item.RedirectURI
+		}
+		if item.ClientID != "" {
+			base.ClientID = item.ClientID
+		}
+		if item.ClientSecret != "" {
+			base.ClientSecret = item.ClientSecret
+		}
+		if len(item.Scopes) > 0 {
+			base.Scopes = item.Scopes
+		}
+		if item.Flow != "" {
+			if flow := Flow(item.Flow); flow == FlowDeviceCode {
+				base.Flow = FlowDeviceCode
+			} else {
+				base.Flow = FlowAuthorizationCode
+			}
+		}
+		if base.Flow == "" {
+			base.Flow = FlowAuthorizationCode
+		}
+		if base.TokenBody = TokenBodyFormat(item.TokenBodyFormat); base.TokenBody != BodyJSON {
+			base.TokenBody = BodyForm
+		}
+		if base.TokenURL == "" || base.ClientID == "" {
+			continue
+		}
+		base.ID = item.ID
+		base.UsesPKCE = true
+		register(base)
 	}
 }
 

@@ -153,8 +153,10 @@ func (s *Sessions) StartAuthorization(p *Provider, redirectURI string) (*StartRe
 			q.Set("code_challenge", challenge)
 			q.Set("code_challenge_method", "S256")
 		}
-		if redirectURI != "" {
-			q.Set("redirect_uri", redirectURI)
+		// 用会话内已归一的值：入参优先，其次供应商配置的回调地址。
+		// 换令牌时用的也是 sess.redirectURI，两处必须一致，否则上游会拒绝。
+		if sess.redirectURI != "" {
+			q.Set("redirect_uri", sess.redirectURI)
 		}
 
 		s.mu.Lock()

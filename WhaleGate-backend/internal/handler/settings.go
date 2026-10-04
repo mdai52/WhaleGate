@@ -51,5 +51,11 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		auditOK(h.svc, c, model.AuditSettingsUpdate, "settings", "self_use_mode", "自用模式"+state)
 	}
 
+	// 存储后端变更影响全部历史作品的可访问性，单独留痕。
+	if before != nil && before.StudioStorageDriver != updated.StudioStorageDriver {
+		auditOK(h.svc, c, model.AuditSettingsUpdate, "settings", "studio_storage_driver",
+			"绘图存储切换为 "+updated.StudioStorageDriver)
+	}
+
 	response.OK(c, updated)
 }
