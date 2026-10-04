@@ -13,6 +13,9 @@
 *.log
 *.pid
 *.sqlite
+# 绘图工作台生成图片的本地存储
+/data/
+WhaleGate-backend/data/
 .env
 .env.local
 .Trash-0/

@@ -39,6 +39,33 @@ type Settings struct {
 	PasskeyRPID string `json:"passkey_rp_id"`
 	// PasskeyRPOrigins 通行密钥允许的源地址，多个以英文逗号分隔。
 	PasskeyRPOrigins string `json:"passkey_rp_origins"`
+
+	// ---------------------------------------------------------------- 绘图工作台存储
+
+	// StudioStorageDriver 存储后端：local 本地磁盘 / s3 对象存储。
+	StudioStorageDriver string `json:"studio_storage_driver"`
+	// StudioLocalRoot 本地存储根目录；留空时回退到 studio.data_dir 配置。
+	StudioLocalRoot string `json:"studio_local_root"`
+	// StudioLocalBaseURL 本地目录已由外部 Web 服务器直接服务时的公开访问前缀。
+	StudioLocalBaseURL string `json:"studio_local_base_url"`
+	// StudioS3Endpoint 对象存储服务地址，需带协议。
+	StudioS3Endpoint string `json:"studio_s3_endpoint"`
+	// StudioS3Region 区域。
+	StudioS3Region string `json:"studio_s3_region"`
+	// StudioS3Bucket 桶名。
+	StudioS3Bucket string `json:"studio_s3_bucket"`
+	// StudioS3Prefix 桶内对象键前缀。
+	StudioS3Prefix string `json:"studio_s3_prefix"`
+	// StudioS3AccessKey 访问密钥 ID。
+	StudioS3AccessKey string `json:"studio_s3_access_key"`
+	// StudioS3SecretKey 访问密钥；响应中始终为空，仅更新时传入。
+	StudioS3SecretKey string `json:"studio_s3_secret_key"`
+	// StudioS3SecretKeySet 是否已配置访问密钥。
+	StudioS3SecretKeySet bool `json:"studio_s3_secret_key_set"`
+	// StudioS3PublicBaseURL 公开访问前缀（CDN 或桶公开域名），留空则经网关代理回读。
+	StudioS3PublicBaseURL string `json:"studio_s3_public_base_url"`
+	// StudioS3ForcePathStyle 是否使用路径风格寻址。
+	StudioS3ForcePathStyle bool `json:"studio_s3_force_path_style"`
 }
 
 // 设置默认值。
@@ -120,18 +147,35 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 		return nil, apierr.New(apierr.ErrInvalidParam, "启用通行密钥时需填写依赖方 ID（RP ID）")
 	}
 
+	// 绘图工作台存储：驱动须为 local / s3；选 s3 时端点、桶与密钥缺一不可。
+	driver, secretKey, secretCipher, err := c.resolveStudioStorage(ctx, &in)
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now()
 	values := map[string]string{
-		model.SettingSelfUseMode:      strconv.FormatBool(in.SelfUseMode),
-		model.SettingSkillsEnabled:    strconv.FormatBool(in.SkillsEnabled),
-		model.SettingMCPEnabled:       strconv.FormatBool(in.MCPEnabled),
-		model.SettingMCPMaxRounds:     strconv.Itoa(in.MCPMaxRounds),
-		model.SettingTLSEnabled:       strconv.FormatBool(enabled),
-		model.SettingTLSCert:          cert,
-		model.SettingTLSKey:           key,
-		model.SettingPasskeyEnabled:   strconv.FormatBool(in.PasskeyEnabled),
-		model.SettingPasskeyRPID:      strings.TrimSpace(in.PasskeyRPID),
-		model.SettingPasskeyRPOrigins: strings.TrimSpace(in.PasskeyRPOrigins),
+		model.SettingSelfUseMode:            strconv.FormatBool(in.SelfUseMode),
+		model.SettingSkillsEnabled:          strconv.FormatBool(in.SkillsEnabled),
+		model.SettingMCPEnabled:             strconv.FormatBool(in.MCPEnabled),
+		model.SettingMCPMaxRounds:           strconv.Itoa(in.MCPMaxRounds),
+		model.SettingTLSEnabled:             strconv.FormatBool(enabled),
+		model.SettingTLSCert:                cert,
+		model.SettingTLSKey:                 key,
+		model.SettingPasskeyEnabled:         strconv.FormatBool(in.PasskeyEnabled),
+		model.SettingPasskeyRPID:            strings.TrimSpace(in.PasskeyRPID),
+		model.SettingPasskeyRPOrigins:       strings.TrimSpace(in.PasskeyRPOrigins),
+		model.SettingStudioStorageDriver:    driver,
+		model.SettingStudioLocalRoot:        strings.TrimSpace(in.StudioLocalRoot),
+		model.SettingStudioLocalBaseURL:     strings.TrimSpace(in.StudioLocalBaseURL),
+		model.SettingStudioS3Endpoint:       strings.TrimSpace(in.StudioS3Endpoint),
+		model.SettingStudioS3Region:         strings.TrimSpace(in.StudioS3Region),
+		model.SettingStudioS3Bucket:         strings.TrimSpace(in.StudioS3Bucket),
+		model.SettingStudioS3Prefix:         strings.TrimSpace(in.StudioS3Prefix),
+		model.SettingStudioS3AccessKey:      strings.TrimSpace(in.StudioS3AccessKey),
+		model.SettingStudioS3SecretKey:      secretCipher,
+		model.SettingStudioS3PublicBaseURL:  strings.TrimSpace(in.StudioS3PublicBaseURL),
+		model.SettingStudioS3ForcePathStyle: strconv.FormatBool(in.StudioS3ForcePathStyle),
 	}
 	for k, v := range values {
 		row := model.AppSetting{Key: k, Value: v, UpdatedBy: userID, UpdatedAt: now}
@@ -144,12 +188,15 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 		}
 	}
 
-	// 刷新缓存快照（私钥不回显）。
+	// 刷新缓存快照（私钥与对象存储密钥均不回显）。
 	out := in
 	out.TLSEnabled = enabled
 	out.TLSCert = cert
 	out.TLSKey = ""
 	out.TLSKeySet = key != ""
+	out.StudioStorageDriver = driver
+	out.StudioS3SecretKey = ""
+	out.StudioS3SecretKeySet = secretKey != ""
 	settingsMu.Lock()
 	settingsSnap = out
 	settingsAt = time.Now()
@@ -174,10 +221,14 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 	// 通行密钥配置变更实时生效，无需重启。
 	c.rebuildWebAuthn(ctx)
 
+	// 存储后端保持常驻连接，配置变更后即时重建，无需重启。
+	c.reloadStudioStorage(out, secretKey)
+
 	if c.Logger != nil {
 		c.Logger.Info("全局设置已更新",
 			zap.Bool("self_use_mode", in.SelfUseMode),
 			zap.Bool("tls_enabled", enabled),
+			zap.String("studio_storage_driver", driver),
 			zap.Uint("operator", userID))
 	}
 	return &out, nil
@@ -243,6 +294,29 @@ func applySetting(out *Settings, key, value string) {
 		out.PasskeyRPID = value
 	case model.SettingPasskeyRPOrigins:
 		out.PasskeyRPOrigins = value
+	case model.SettingStudioStorageDriver:
+		out.StudioStorageDriver = value
+	case model.SettingStudioLocalRoot:
+		out.StudioLocalRoot = value
+	case model.SettingStudioLocalBaseURL:
+		out.StudioLocalBaseURL = value
+	case model.SettingStudioS3Endpoint:
+		out.StudioS3Endpoint = value
+	case model.SettingStudioS3Region:
+		out.StudioS3Region = value
+	case model.SettingStudioS3Bucket:
+		out.StudioS3Bucket = value
+	case model.SettingStudioS3Prefix:
+		out.StudioS3Prefix = value
+	case model.SettingStudioS3AccessKey:
+		out.StudioS3AccessKey = value
+	case model.SettingStudioS3SecretKey:
+		// 密钥只回显"是否已配置"，明文永不返回给客户端。
+		out.StudioS3SecretKeySet = value != ""
+	case model.SettingStudioS3PublicBaseURL:
+		out.StudioS3PublicBaseURL = value
+	case model.SettingStudioS3ForcePathStyle:
+		out.StudioS3ForcePathStyle = value == "true" || value == "1"
 	}
 }
 

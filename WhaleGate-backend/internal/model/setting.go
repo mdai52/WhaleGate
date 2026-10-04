@@ -24,6 +24,31 @@ const (
 	SettingPasskeyRPID = "passkey_rp_id"
 	// SettingPasskeyRPOrigins 通行密钥允许的源地址，多个以英文逗号分隔。
 	SettingPasskeyRPOrigins = "passkey_rp_origins"
+
+	// ---------------------------------------------------------------- 绘图工作台存储
+
+	// SettingStudioStorageDriver 存储后端：local 本地磁盘 / s3 对象存储。
+	SettingStudioStorageDriver = "studio_storage_driver"
+	// SettingStudioLocalRoot 本地存储根目录；留空时回退到 studio.data_dir 配置。
+	SettingStudioLocalRoot = "studio_local_root"
+	// SettingStudioLocalBaseURL 本地目录已由外部 Web 服务器直接服务时的公开访问前缀。
+	SettingStudioLocalBaseURL = "studio_local_base_url"
+	// SettingStudioS3Endpoint 对象存储服务地址，需带协议。
+	SettingStudioS3Endpoint = "studio_s3_endpoint"
+	// SettingStudioS3Region 区域。
+	SettingStudioS3Region = "studio_s3_region"
+	// SettingStudioS3Bucket 桶名。
+	SettingStudioS3Bucket = "studio_s3_bucket"
+	// SettingStudioS3Prefix 桶内对象键前缀。
+	SettingStudioS3Prefix = "studio_s3_prefix"
+	// SettingStudioS3AccessKey 访问密钥 ID。
+	SettingStudioS3AccessKey = "studio_s3_access_key"
+	// SettingStudioS3SecretKey 访问密钥密文（AES-256-GCM，仅存储不回显）。
+	SettingStudioS3SecretKey = "studio_s3_secret_key"
+	// SettingStudioS3PublicBaseURL 公开访问前缀（CDN 或桶公开域名），留空则经网关代理回读。
+	SettingStudioS3PublicBaseURL = "studio_s3_public_base_url"
+	// SettingStudioS3ForcePathStyle 是否使用路径风格寻址（自建 MinIO 与部分国内厂商需要）。
+	SettingStudioS3ForcePathStyle = "studio_s3_force_path_style"
 )
 
 // AppSetting 全局运行时设置，value 存放 JSON 文本。

@@ -26,6 +26,19 @@ type Config struct {
 	OAuth    OAuthConfig    `mapstructure:"oauth"`
 	Auth     AuthConfig     `mapstructure:"auth"`
 	Skills   SkillsConfig   `mapstructure:"skills"`
+	Studio   StudioConfig   `mapstructure:"studio"`
+}
+
+// StudioConfig 绘图工作台配置。
+type StudioConfig struct {
+	// DataDir 生成图片的本地存储目录；作品记录只保存相对路径，
+	// 由 /api/v1/studio/works/:id/images/:index 按鉴权与归属校验后回读。
+	DataDir string `mapstructure:"data_dir"`
+	// MaxImagesPerRequest 单次请求允许生成的最大张数。
+	MaxImagesPerRequest int `mapstructure:"max_images_per_request"`
+	// DownloadTimeout 拉取上游临时图片地址的超时；图片统一转存本地，
+	// 避免上游链接过期后作品库无法回看。
+	DownloadTimeout time.Duration `mapstructure:"download_timeout"`
 }
 
 // SkillsConfig 技能目录配置。
@@ -87,6 +100,9 @@ type OAuthProviderConfig struct {
 	RedirectURI string `mapstructure:"redirect_uri"`
 	// ClientID 客户端 ID。
 	ClientID string `mapstructure:"client_id"`
+	// ClientSecret 客户端密钥。Google 等供应商的令牌端点强制要求，
+	// 自建 OAuth 客户端时必须填写，否则换不到令牌。
+	ClientSecret string `mapstructure:"client_secret"`
 	// Scopes 授权范围。
 	Scopes []string `mapstructure:"scopes"`
 	// TokenBodyFormat 令牌端点请求体格式：form（默认）或 json。
@@ -367,6 +383,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.webauthn.rp_id", "localhost")
 	v.SetDefault("auth.webauthn.rp_display_name", "鲸闸 WhaleGate")
 	v.SetDefault("auth.webauthn.rp_origins", []string{"http://localhost:5173"})
+
+	v.SetDefault("studio.data_dir", "./data/studio")
+	v.SetDefault("studio.max_images_per_request", 4)
+	v.SetDefault("studio.download_timeout", "60s")
 }
 
 // Validate 校验必填项与取值合法性。

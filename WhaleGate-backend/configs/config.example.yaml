@@ -136,6 +136,17 @@ web:
   dist_dir: ../WhaleGate-frontend/dist
   enable: true
 
+studio:
+  # 存储后端由管理员在「系统设置 → 绘图工作台存储」中维护（本地磁盘 / 对象存储），
+  # 保存后立即生效；此处仅作为本地磁盘模式未填写目录时的兜底默认值。
+  # 上游返回的 base64 与临时链接都会转存，因为上游链接通常几小时后失效。
+  # 该目录需要可写，容器化部署时请挂持久卷。
+  data_dir: ./data/studio
+  # 单次请求最多生成的图片张数（防止一次调用打爆上游与本地磁盘）
+  max_images_per_request: 4
+  # 转存上游临时图片地址的超时
+  download_timeout: 60s
+
 auth:
   # 前端地址，第三方登录完成后跳转回前端
   frontend_base: http://localhost:5173
@@ -156,8 +167,9 @@ auth:
     rp_origins: ["http://localhost:5173"]
 
 oauth:
-  # OAuth 供应商：内置 anthropic 与 codex（CLI 端点），其余按需在此补充。
-  # 未公开文档化端点的服务（如 Kimi、Muse）需要自行提供 client_id 与端点。
+  # OAuth 供应商：内置 anthropic / codex / gemini / kimi，其余按需在此补充。
+  # 同 ID 声明为「字段级覆盖」：只替换这里显式填写的字段，其余沿用内置定义，
+  # 因此接入自建客户端时不必重复抄写端点与 scopes。
   providers: []
   #  - id: kimi-cn
   #    name: Kimi 国内站
@@ -167,6 +179,17 @@ oauth:
   #    token_url: https://kimi.com/oauth/token
   #    client_id: your-client-id
   #    scopes: []
-  #    # 授权码流程（authorization_code）必须填写回调地址，且需在对应 OAuth 应用中登记；
-  #    # 前端发起授权时若未显式传入，则使用此值，否则回退到 auth.frontend_base。
-  #    redirect_uri: https://your-domain.example.com
+  #
+  # 示例：用自己的 Google Cloud 项目登录 Gemini（内置定义使用 Gemini CLI 的公开
+  # client_id，其已登记的回调地址由 Google 维护，无法登记本网关地址，会报
+  # redirect_uri_mismatch；自建客户端即可解决）。
+  #   1. Google Cloud Console → API 和服务 → 凭据 → 创建 OAuth 客户端 ID（Web 应用）
+  #   2. 「已获授权的重定向 URI」里登记下面 redirect_uri 的**完全一致**的值
+  #   3. 在「OAuth 同意屏幕」把自己加为测试用户（未发布应用时必需）
+  #  - id: gemini
+  #    client_id: 1234567890-xxxxxxxx.apps.googleusercontent.com
+  #    client_secret: GOCSPX-xxxxxxxx
+  #    redirect_uri: https://gateway.example.com
+  #
+  # 注意：client_secret 为明文存放于配置文件，请确保文件权限收紧（chmod 600）
+  # 且不要提交进版本库；Google 的令牌端点强制要求该字段。

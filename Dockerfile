@@ -32,7 +32,9 @@ COPY --from=server /out/whalegate /app/whalegate
 COPY --from=web /web/dist /app/WhaleGate-frontend/dist
 COPY --from=server /src/configs /app/configs
 COPY --from=server /src/migrations /app/migrations
-RUN chown -R whalegate:whalegate /app
+# 绘图工作台生成图片的落盘目录，需在构建期建好并归属运行用户，
+# 否则容器内非 root 身份启动时无法写入。
+RUN mkdir -p /app/data/studio && chown -R whalegate:whalegate /app
 USER whalegate
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

@@ -84,6 +84,8 @@ func New(opts Options) (*App, error) {
 
 	// 从「数据库优先、配置文件兜底」加载 TLS 配置，决定监听协议与安全响应头。
 	app.Service.LoadTLSSettings(context.Background())
+	// 加载绘图工作台的图片存储后端（本地磁盘或对象存储），配置由管理员在后台维护。
+	app.Service.LoadStudioStorage(context.Background())
 
 	app.Engine = router.NewEngine(router.Deps{
 		Config:  cfg,

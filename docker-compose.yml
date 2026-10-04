@@ -61,7 +61,10 @@ services:
     volumes:
       - ./WhaleGate-backend/configs:/app/configs:ro
       - ./WhaleGate-backend/migrations:/app/migrations:ro
+      # 绘图工作台生成图片的持久化目录
+      - studiodata:/app/data/studio
 
 volumes:
   pgdata:
   redisdata:
+  studiodata:
