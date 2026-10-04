@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { CopyOutlined, DeleteOutlined, PlusOutlined, SettingOutlined, StopOutlined } from '@ant-design/icons-vue'
+import {
+  CopyOutlined,
+  DeleteOutlined,
+  ImportOutlined,
+  PlusOutlined,
+  SettingOutlined,
+  StopOutlined,
+} from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { apiKeyApi } from '@/api/apikey'
 import { channelApi } from '@/api/channel'
 import { groupApi } from '@/api/group'
 import type { KeyGroup } from '@/api/group'
+import KeyImportDrawer from '@/components/KeyImportDrawer.vue'
 import { useUserStore } from '@/stores/user'
 import type { APIKeyItem, CreateKeyPayload, UpdateKeyPayload } from '@/api/types'
 
@@ -234,6 +242,16 @@ function statusText(record: APIKeyItem) {
   return record.status === 1 ? { text: '正常', color: 'green' } : { text: '已禁用', color: 'default' }
 }
 
+// ---------------------------------------------------------------- 一键导入
+
+const importOpen = ref(false)
+const importTarget = ref<APIKeyItem | null>(null)
+
+function openImport(record: APIKeyItem) {
+  importTarget.value = record
+  importOpen.value = true
+}
+
 // ---------------------------------------------------------------- 编辑配置
 const editOpen = ref(false)
 const editing = ref(false)
@@ -450,6 +468,10 @@ onMounted(load)
           </template>
           <template v-else-if="column.key === 'action'">
             <a-space>
+              <a-button size="small" @click="openImport(record as APIKeyItem)">
+                <ImportOutlined />
+                一键导入
+              </a-button>
               <a-button size="small" :disabled="!!(record as APIKeyItem).revoked_at" @click="openEdit(record as APIKeyItem)">
                 <SettingOutlined />
                 配置
@@ -727,6 +749,8 @@ onMounted(load)
         <a-button type="primary" block :loading="editing" @click="submitEdit">保存配置</a-button>
       </a-form>
     </a-drawer>
+
+    <KeyImportDrawer v-model:open="importOpen" :masked-key="importTarget?.masked_key ?? ''" />
   </div>
 </template>
 
