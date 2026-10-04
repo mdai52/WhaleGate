@@ -164,8 +164,12 @@ func (c *Container) PreviewParams(ctx context.Context, in ParamPreviewInput) (*P
 		Supported:     sortedParamSet(gateway.SupportedParams(channel.Type, schema)),
 		Applied:       report.Applied,
 		Dropped:       report.Dropped,
-		Injected:      override,
-		Payload:       payload,
+		// 集合类字段一律初始化为空切片：nil 会被序列化成 null，
+		// 前端对 null 取 length 会抛错，导致整块结果渲染不出来。
+		Excluded: []string{},
+		Unknown:  []string{},
+		Injected: override,
+		Payload:  payload,
 	}
 	out.Channel.ID = channel.ID
 	out.Channel.Name = channel.Name
@@ -188,13 +192,15 @@ func (c *Container) PreviewParams(ctx context.Context, in ParamPreviewInput) (*P
 }
 
 // unknownParams 挑出既非标准参数、也无法归一到标准名的自定义参数。
-// 这类参数会原样透传给上游（前提是渠道声明支持），需要提示用户自行确认上游是否认识。
+// 这类参数需要提示用户自行确认上游是否认识，或是否拼写有误。
+//
+// 始终返回非 nil 切片：空结果序列化为 []，避免前端拿到 null。
 func unknownParams(params map[string]interface{}) []string {
+	out := []string{}
 	if len(params) == 0 {
-		return nil
+		return out
 	}
 	standard := standardParamNames()
-	var out []string
 	for name := range params {
 		if _, ok := standard[gateway.NormalizeParamName(name)]; ok {
 			continue

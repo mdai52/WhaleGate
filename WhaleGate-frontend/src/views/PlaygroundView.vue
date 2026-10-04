@@ -81,6 +81,22 @@ async function loadModels() {
   }
 }
 
+/**
+ * 兼容后端可能返回 null 的集合字段。
+ * Go 的 nil slice 会序列化成 null，直接取 .length 会在渲染期抛错并把整块结果打没，
+ * 因此这里统一兜底成空数组。
+ */
+function normalize(data: ParamPreview): ParamPreview {
+  return {
+    ...data,
+    supported: data.supported ?? [],
+    excluded: data.excluded ?? [],
+    applied: data.applied ?? [],
+    dropped: data.dropped ?? [],
+    unknown: data.unknown ?? [],
+  }
+}
+
 async function doPreview() {
   if (!model.value) {
     message.warning('请先选择模型')
@@ -88,11 +104,13 @@ async function doPreview() {
   }
   previewing.value = true
   try {
-    preview.value = await playgroundApi.preview({
-      model: model.value,
-      prompt: prompt.value,
-      params: finalParams.value,
-    })
+    preview.value = normalize(
+      await playgroundApi.preview({
+        model: model.value,
+        prompt: prompt.value,
+        params: finalParams.value,
+      }),
+    )
   } catch (e) {
     message.error((e as Error).message || '预览失败')
     preview.value = null
@@ -306,7 +324,7 @@ onMounted(loadModels)
               <span v-else class="wg-muted">无</span>
             </div>
 
-            <div v-if="preview.unknown.length" class="wg-result-block">
+            <div v-if="preview.unknown?.length" class="wg-result-block">
               <div class="wg-result-title">未标准化参数</div>
               <a-space wrap>
                 <a-tag v-for="name in preview.unknown" :key="name" color="orange">{{ name }}</a-tag>
