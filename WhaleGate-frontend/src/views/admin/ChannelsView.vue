@@ -6,6 +6,7 @@ import { channelApi } from '@/api/channel'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { parseJSON } from '@/utils/json'
 import AliasEditor from '@/components/AliasEditor.vue'
+import ConfigHint from '@/components/ConfigHint.vue'
 import KeyValueEditor from '@/components/KeyValueEditor.vue'
 import ParamSchemaEditor from '@/components/ParamSchemaEditor.vue'
 import type {
@@ -197,6 +198,101 @@ function resetAdvanced() {
   advanced.schema = {}
 }
 
+// ---------------------------------------------------------------- 高级配置辅助
+
+/** 请求参数注入的常见字段候选，减少手打与拼写错误。 */
+const OVERRIDE_KEY_OPTIONS = [
+  'temperature',
+  'top_p',
+  'top_k',
+  'max_tokens',
+  'seed',
+  'response_format',
+  'modalities',
+  'reasoning_effort',
+  'parallel_tool_calls',
+]
+
+/** 各配置项的说明与示例：高级配置概念偏抽象，就地给出可套用的内容。 */
+const ADVANCED_HINTS = {
+  mapping: {
+    title: '模型名映射',
+    points: [
+      '左侧填「对外模型名」，右侧填「上游真实模型名」。',
+      '用户请求左侧的名字时，网关自动改用右侧的名字发往上游。',
+      '适合上游模型名带日期后缀、或想对外隐藏真实模型名的场景。',
+      '未列入映射的模型会原样转发。',
+    ],
+    example: `{
+  "gpt-4o": "gpt-4o-2024-08-06",
+  "claude-3-5-sonnet": "claude-3-5-sonnet-20241022"
+}`,
+  },
+  aliases: {
+    title: '模型别名',
+    points: [
+      '把一个上游模型 fork 成多个对外模型名，对客户端表现为多个独立模型。',
+      '每个别名可带专属参数注入，例如把同一个文本模型包装成不同分辨率的生图模型。',
+      '别名会出现在 /v1/models 的模型列表里，也会被计费倍率单独识别。',
+      '别名的「上游模型」留空表示沿用别名自身作为模型名。',
+    ],
+    example: `{
+  "img-1k": {
+    "model": "gpt-4o",
+    "override": { "tools": [{ "type": "image_generation", "size": "1024x1024" }] }
+  },
+  "img-2k": {
+    "model": "gpt-4o",
+    "override": { "tools": [{ "type": "image_generation", "size": "2048x2048" }] }
+  }
+}`,
+  },
+  override: {
+    title: '请求参数注入',
+    points: [
+      '强制合并到发往上游的请求体，对所有经过该渠道的请求生效。',
+      '优先级低于别名专属注入：两者冲突时以别名的为准。',
+      '值支持数字、布尔、字符串与 JSON（对象 / 数组）。',
+      '适合上游需要固定参数的场景，例如固定输出模态、关闭水印、指定区域。',
+    ],
+    example: `{
+  "modalities": ["image", "text"],
+  "seed": 42
+}`,
+  },
+  schema: {
+    title: '参数能力声明',
+    points: [
+      '声明上游支持哪些统一参数；留空则按渠道协议默认集处理。',
+      '用户传入不在支持集里的参数会被自动丢弃，避免上游直接报错。',
+      '「排除的参数」优先级高于「支持的参数」，用于明确禁用某个字段。',
+      '「默认值」在用户未传该参数时生效，仅影响未显式传参的请求。',
+    ],
+    example: `{
+  "supported": ["temperature", "top_p", "max_tokens"],
+  "exclude": ["seed"],
+  "defaults": { "temperature": 0.7 }
+}`,
+  },
+}
+
+/** 把说明弹层里的示例填入对应编辑器。 */
+function applyAdvancedSample(field: keyof typeof ADVANCED_HINTS, example: string) {
+  const parsed = parseJSON<Record<string, unknown>>(example, {})
+  if (!parsed.ok) {
+    message.error('示例内容无法解析')
+    return
+  }
+  if (field === 'schema') {
+    advanced.schema = parsed.value as typeof advanced.schema
+  } else if (field === 'aliases') {
+    advanced.aliases = parsed.value as typeof advanced.aliases
+  } else {
+    advanced[field] = parsed.value as Record<string, string>
+  }
+  message.success('已填入示例，可按需修改')
+}
+
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
   { title: '名称', dataIndex: 'name', key: 'name' },
@@ -307,20 +403,34 @@ function buildPayload(): ChannelInput | null {
   }
 
   // 高级配置：可视化编辑器输出的结构化对象直接序列化，无需用户写 JSON
+  return { ...payload, ...advancedPayload() }
+}
+
+/**
+ * 高级配置 → 渠道字段。
+ * 提交与「配置预览」共用同一份组装逻辑，保证预览与实际写入完全一致。
+ */
+function advancedPayload(): Partial<ChannelInput> {
+  const out: Partial<ChannelInput> = {}
   if (Object.keys(advanced.mapping).length) {
-    payload.model_mapping = advanced.mapping
+    out.model_mapping = advanced.mapping
   }
   if (Object.keys(advanced.aliases).length) {
-    payload.model_alias = advanced.aliases as ChannelInput['model_alias']
+    out.model_alias = advanced.aliases as ChannelInput['model_alias']
   }
   if (Object.keys(advanced.override).length) {
-    payload.request_override = parseValueRecord(advanced.override)
+    out.request_override = parseValueRecord(advanced.override)
   }
   if (Object.keys(advanced.schema).length) {
-    payload.param_schema = advanced.schema as ChannelInput['param_schema']
+    out.param_schema = advanced.schema as ChannelInput['param_schema']
   }
-  return payload
+  return out
 }
+
+/** 高级配置的 JSON 预览：把将写入渠道的字段以格式化 JSON 呈现，便于核对与复制。 */
+const advancedPreview = computed(() => JSON.stringify(advancedPayload(), null, 2))
+
+const hasAdvancedConfig = computed(() => Object.keys(advancedPayload()).length > 0)
 
 /** 把 KV 编辑器中的字符串值解析为数字 / 布尔 / JSON */
 function parseValueRecord(record: Record<string, string>): Record<string, unknown> {
@@ -627,47 +737,87 @@ load()
           </a-select>
         </a-form-item>
 
-        <a-divider orientation="left">高级配置</a-divider>
+        <a-divider orientation="left">
+          <span>高级配置</span>
+          <span class="wg-muted">（不确定怎么填？点每项标题后的 ? 查看说明与示例）</span>
+        </a-divider>
 
         <a-form-item>
           <template #label>
             模型名映射
-            <span class="wg-muted">（对外名 → 上游真实名，用户请求对外名时自动改写）</span>
+            <ConfigHint
+              :title="ADVANCED_HINTS.mapping.title"
+              :points="ADVANCED_HINTS.mapping.points"
+              :example="ADVANCED_HINTS.mapping.example"
+              @apply="(v: string) => applyAdvancedSample('mapping', v)"
+            />
           </template>
           <KeyValueEditor
             v-model="advanced.mapping"
             key-placeholder="对外模型名，如 gpt-4o"
-            value-placeholder="上游模型名，如 gpt-4o-2024"
+            value-placeholder="上游模型名，如 gpt-4o-2024-08-06"
+            :key-options="aliasModelOptions"
+            :value-options="aliasModelOptions"
+            empty-hint="不配置时模型名原样转发；需要改写再添加。"
+            :sample="ADVANCED_HINTS.mapping.example"
           />
         </a-form-item>
 
         <a-form-item>
           <template #label>
             模型别名
-            <span class="wg-muted">（把一个上游模型 fork 成多个对外模型名，可各自注入参数，如把文本模型包装成不同分辨率的生图模型）</span>
+            <ConfigHint
+              :title="ADVANCED_HINTS.aliases.title"
+              :points="ADVANCED_HINTS.aliases.points"
+              :example="ADVANCED_HINTS.aliases.example"
+              @apply="(v: string) => applyAdvancedSample('aliases', v)"
+            />
           </template>
-          <AliasEditor v-model="advanced.aliases" :model-options="aliasModelOptions" />
+          <AliasEditor
+            v-model="advanced.aliases"
+            :model-options="aliasModelOptions"
+            :sample="ADVANCED_HINTS.aliases.example"
+          />
         </a-form-item>
 
         <a-form-item>
           <template #label>
             请求参数注入
-            <span class="wg-muted">（强制合并到发往上游的请求体，对所有经过该渠道的请求生效）</span>
+            <ConfigHint
+              :title="ADVANCED_HINTS.override.title"
+              :points="ADVANCED_HINTS.override.points"
+              :example="ADVANCED_HINTS.override.example"
+              @apply="(v: string) => applyAdvancedSample('override', v)"
+            />
           </template>
           <KeyValueEditor
             v-model="advanced.override"
-            key-placeholder="请求字段名，如 temperature"
+            key-placeholder="请求字段名，如 modalities"
             value-placeholder="值，支持数字 / 布尔 / JSON"
+            :key-options="OVERRIDE_KEY_OPTIONS"
+            empty-hint="不配置时不向上游追加任何字段。"
+            :sample="ADVANCED_HINTS.override.example"
           />
         </a-form-item>
 
         <a-form-item>
           <template #label>
             参数能力声明
-            <span class="wg-muted">（声明上游支持的统一参数；不声明则按协议默认集，用户传不支持的参数会被自动丢弃）</span>
+            <ConfigHint
+              :title="ADVANCED_HINTS.schema.title"
+              :points="ADVANCED_HINTS.schema.points"
+              :example="ADVANCED_HINTS.schema.example"
+              @apply="(v: string) => applyAdvancedSample('schema', v)"
+            />
           </template>
-          <ParamSchemaEditor v-model="advanced.schema" />
+          <ParamSchemaEditor v-model="advanced.schema" :sample="ADVANCED_HINTS.schema.example" />
         </a-form-item>
+
+        <a-collapse v-if="hasAdvancedConfig" ghost class="wg-advanced-preview">
+          <a-collapse-panel key="json" header="配置预览（保存后写入渠道的 JSON）">
+            <pre class="wg-advanced-json">{{ advancedPreview }}</pre>
+          </a-collapse-panel>
+        </a-collapse>
       </a-form>
 
       <template #footer>
@@ -698,5 +848,22 @@ load()
 
 .wg-muted {
   color: rgba(0, 0, 0, 0.45);
+}
+
+.wg-advanced-preview {
+  margin-bottom: 8px;
+  border-top: 1px dashed #eef0f4;
+}
+
+.wg-advanced-json {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: #f5f7fa;
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

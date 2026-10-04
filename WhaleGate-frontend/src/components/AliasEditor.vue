@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons-vue'
+import { message } from 'ant-design-vue'
+import { parseJSON } from '@/utils/json'
 import KeyValueEditor from './KeyValueEditor.vue'
 
 export interface AliasEntry {
@@ -19,6 +21,8 @@ const props = defineProps<{
   modelValue: Record<string, AliasValue>
   /** 上游模型候选（来自渠道登记或自动探测） */
   modelOptions?: string[]
+  /** 可一键填入的示例，值为 别名 -> { model, override } 的对象 */
+  sample?: string
 }>()
 
 const emit = defineEmits<{ (e: 'update:modelValue', v: Record<string, AliasValue>): void }>()
@@ -102,6 +106,18 @@ function removeRow(index: number) {
   rows.value.splice(index, 1)
   emitChange()
 }
+
+/** 把示例展开成别名行，省去逐条手填。 */
+function applySample() {
+  const parsed = parseJSON<Record<string, AliasValue>>(props.sample ?? '', {})
+  if (!parsed.ok || typeof parsed.value !== 'object' || parsed.value === null) {
+    message.error('示例内容无法解析')
+    return
+  }
+  rows.value = toRows(parsed.value)
+  emitChange()
+  message.success('已填入示例，可按需修改')
+}
 </script>
 
 <template>
@@ -138,10 +154,19 @@ function removeRow(index: number) {
         />
       </div>
     </div>
-    <a-button size="small" type="dashed" block @click="addRow">
-      <PlusOutlined />
-      添加别名
-    </a-button>
+    <div v-if="!rows.length" class="wg-alias-empty">
+      <span class="wg-muted">
+        还没有别名。别名用于把同一个上游模型包装成多个对外模型名，各自注入不同参数。
+      </span>
+    </div>
+
+    <div class="wg-alias-actions">
+      <a-button size="small" type="dashed" block @click="addRow">
+        <PlusOutlined />
+        添加别名
+      </a-button>
+      <a-button v-if="sample" size="small" type="text" @click="applySample">填入示例</a-button>
+    </div>
   </div>
 </template>
 
@@ -158,6 +183,20 @@ function removeRow(index: number) {
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.wg-alias-empty {
+  padding: 0 0 8px;
+}
+
+.wg-alias-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wg-muted {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
 }
 
 .wg-alias-name {

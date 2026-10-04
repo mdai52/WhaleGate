@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { message } from 'ant-design-vue'
+import { parseJSON } from '@/utils/json'
 import KeyValueEditor from './KeyValueEditor.vue'
 
 /** 常见统一参数预置项 */
@@ -28,6 +30,8 @@ export interface ParamSchemaValue {
 
 const props = defineProps<{
   modelValue: ParamSchemaValue
+  /** 可一键填入的示例，字段与 ParamSchemaValue 一致 */
+  sample?: string
 }>()
 
 const emit = defineEmits<{ (e: 'update:modelValue', v: ParamSchemaValue): void }>()
@@ -83,6 +87,20 @@ function emitChange() {
     out.defaults = defaults
   }
   emit('update:modelValue', out)
+}
+
+/** 把示例展开到三个字段，省去逐项手填。 */
+function applySample() {
+  const parsed = parseJSON<ParamSchemaValue>(props.sample ?? '', {})
+  if (!parsed.ok || typeof parsed.value !== 'object' || parsed.value === null) {
+    message.error('示例内容无法解析')
+    return
+  }
+  supported.value = [...(parsed.value.supported ?? [])]
+  exclude.value = [...(parsed.value.exclude ?? [])]
+  defaults.value = serializeDefaults(parsed.value.defaults)
+  emitChange()
+  message.success('已填入示例，可按需修改')
 }
 
 function parseScalar(v: string): unknown {
@@ -142,8 +160,15 @@ function parseScalar(v: string): unknown {
         v-model="defaults"
         key-placeholder="参数名"
         value-placeholder="默认值，支持数字 / 布尔 / JSON"
+        :key-options="COMMON_PARAMS"
+        empty-hint="暂未设置默认值；留空表示完全按用户请求分发。"
+        sample='{"temperature": 0.7, "max_tokens": 1024}'
         @update:model-value="emitChange"
       />
+    </div>
+
+    <div class="wg-schema-actions">
+      <a-button v-if="sample" size="small" type="link" @click="applySample">填入示例</a-button>
     </div>
   </div>
 </template>
@@ -156,5 +181,9 @@ function parseScalar(v: string): unknown {
 .wg-schema-label {
   margin-bottom: 4px;
   font-weight: 500;
+}
+
+.wg-schema-actions {
+  text-align: right;
 }
 </style>
