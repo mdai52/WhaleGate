@@ -3,7 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ApiOutlined,
+  BookOutlined,
   DashboardOutlined,
+  ExperimentOutlined,
   FileSearchOutlined,
   HistoryOutlined,
   IdcardOutlined,
@@ -46,6 +48,8 @@ interface MenuItem {
 const menus = computed<MenuItem[]>(() => {
   const list: MenuItem[] = [
     { key: '/dashboard', label: '概览', icon: 'DashboardOutlined', group: '用户门户' },
+    { key: '/guide', label: '接入指南', icon: 'BookOutlined', group: '用户门户' },
+    { key: '/playground', label: '参数调试', icon: 'ExperimentOutlined', group: '用户门户' },
     { key: '/keys', label: '密钥管理', icon: 'KeyOutlined', group: '用户门户' },
     { key: '/usage', label: '调用历史', icon: 'HistoryOutlined', group: '用户门户' },
     { key: '/account', label: '账号与安全', icon: 'UserOutlined', group: '用户门户' },
@@ -82,7 +86,9 @@ const menuGroups = computed(() => {
 /** 图标名 -> 组件，供 <component :is> 动态渲染 */
 const iconMap: Record<string, unknown> = {
   ApiOutlined,
+  BookOutlined,
   DashboardOutlined,
+  ExperimentOutlined,
   FileSearchOutlined,
   HistoryOutlined,
   IdcardOutlined,

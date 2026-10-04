@@ -60,7 +60,8 @@ make run                  # 启动服务端（默认 :8080）
 | 页面 | 说明 |
 | --- | --- |
 | 概览 | 余额 / 累计消耗 / 近 N 天请求与 Token 卡片，用量趋势图表（ECharts），快速接入示例 |
-| 接入指南 | 网关地址、鉴权方式、Python / Node / cURL / Gemini 原生可复制示例、常见问题 |
+| 接入指南 | 网关地址、鉴权方式、Python / Node / cURL / Gemini 原生可复制示例；**自定义参数传参详解**；**AI 客户端接入**（Cherry Studio / ChatBox / NextChat / LobeChat / Open WebUI / Cursor / Cline / Continue 的填法与配置下载）；常见问题 |
+| 参数调试 | 选模型、勾选或自定义参数，预览哪些会生效 / 哪些会被丢弃及原因，并查看最终发往上游的请求体；也可用真实密钥打一次实测。预览不消耗额度 |
 | 密钥管理 | 创建（明文只展示一次）、列表、吊销、删除；展示创建时间、最近使用、累计请求与累计 Token |
 | 调用历史 | 按模型 / 状态 / 时间范围筛选，展示 token、点数、耗时、首字延迟、计费置信度 |
 | 账号与安全 | 密码修改、Passkey / WebAuthn、GitHub 绑定 |
@@ -337,6 +338,10 @@ docker compose logs app | grep -i password
 ```json
 { "supported": ["temperature", "top_p", "top_k", "repetition_penalty", "max_tokens", "stop", "seed"] }
 ```
+
+不想靠试错确认参数是否生效，可在「参数调试」页预览：它复用同一套 `ApplyParams`，
+按模型选出渠道后直接给出「已应用 / 被丢弃（含原因）/ 未标准化」三组结果与最终上游请求体，
+不向上游发起请求、不消耗额度。
 
 ### AI 绘图工作台
 

@@ -88,6 +88,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 	credentialHandler := handler.NewCredentialHandler(d.Svc)
 	account := handler.NewAccountHandler(d.Svc)
 	studio := handler.NewStudioHandler(d.Svc)
+	playground := handler.NewPlaygroundHandler(d.Svc)
 
 	pub := e.Group("/api/v1/auth")
 	// 认证接口按 IP 限流 + 登录失败锁定（见 service.Login）
@@ -153,6 +154,13 @@ func registerAPI(e *gin.Engine, d Deps) {
 			studioGroup.GET("/works", studio.Works)
 			studioGroup.DELETE("/works/:id", studio.DeleteWork)
 			studioGroup.GET("/works/:id/images/:index", studio.WorkImage)
+		}
+
+		// 参数调试：预览自定义参数会被如何分配（不发起上游请求、不计费）
+		playgroundGroup := authed.Group("/playground")
+		{
+			playgroundGroup.GET("/models", playground.Models)
+			playgroundGroup.POST("/params/preview", playground.Preview)
 		}
 	}
 

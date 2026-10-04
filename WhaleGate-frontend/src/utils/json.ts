@@ -1,4 +1,4 @@
-/** JSON 文本编辑的解析辅助，用于渠道高级配置（别名 / 注入 / 参数能力）。 */
+/** JSON 文本编辑的解析辅助，用于渠道高级配置与参数调试。 */
 
 export interface ParseResult<T> {
   ok: boolean
@@ -31,4 +31,40 @@ export function stringifyJSON(value: unknown): string {
     return ''
   }
   return JSON.stringify(value, null, 2)
+}
+
+/**
+ * 把表单里的字符串值推断为数字 / 布尔 / JSON，其余按字符串处理。
+ *
+ * 键值表单只能承载字符串，但温度、种子这类参数必须是数字，
+ * 对象与数组（如 stop、modalities）必须是结构化值，否则上游会拒绝。
+ */
+export function parseScalarValue(raw: string): unknown {
+  const text = (raw ?? '').trim()
+  if (text === 'true') {
+    return true
+  }
+  if (text === 'false') {
+    return false
+  }
+  if (text !== '' && !Number.isNaN(Number(text))) {
+    return Number(text)
+  }
+  if (text.startsWith('{') || text.startsWith('[')) {
+    const parsed = parseJSON<unknown>(text, null)
+    return parsed.ok ? parsed.value : raw
+  }
+  return raw
+}
+
+/** 把键值表单（值均为字符串）整体转换为带类型推断的对象，并忽略空键。 */
+export function parseValueRecord(record: Record<string, string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, raw] of Object.entries(record ?? {})) {
+    const name = key.trim()
+    if (name) {
+      out[name] = parseScalarValue(raw)
+    }
+  }
+  return out
 }

@@ -4,7 +4,7 @@ import { DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/i
 import { message, Modal } from 'ant-design-vue'
 import { channelApi } from '@/api/channel'
 import { useIsMobile } from '@/composables/useIsMobile'
-import { parseJSON } from '@/utils/json'
+import { parseJSON, parseValueRecord } from '@/utils/json'
 import AliasEditor from '@/components/AliasEditor.vue'
 import ConfigHint from '@/components/ConfigHint.vue'
 import KeyValueEditor from '@/components/KeyValueEditor.vue'
@@ -431,30 +431,6 @@ function advancedPayload(): Partial<ChannelInput> {
 const advancedPreview = computed(() => JSON.stringify(advancedPayload(), null, 2))
 
 const hasAdvancedConfig = computed(() => Object.keys(advancedPayload()).length > 0)
-
-/** 把 KV 编辑器中的字符串值解析为数字 / 布尔 / JSON */
-function parseValueRecord(record: Record<string, string>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [key, raw] of Object.entries(record)) {
-    const t = raw.trim()
-    if (t === 'true') {
-      out[key] = true
-    } else if (t === 'false') {
-      out[key] = false
-    } else if (t !== '' && !Number.isNaN(Number(t))) {
-      out[key] = Number(t)
-    } else if (t.startsWith('{') || t.startsWith('[')) {
-      try {
-        out[key] = JSON.parse(t)
-      } catch {
-        out[key] = raw
-      }
-    } else {
-      out[key] = raw
-    }
-  }
-  return out
-}
 
 async function submit() {
   if (!form.name.trim()) {

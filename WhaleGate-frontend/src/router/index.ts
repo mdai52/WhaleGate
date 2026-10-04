@@ -33,6 +33,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '接入指南', icon: 'BookOutlined' },
       },
       {
+        path: 'playground',
+        name: 'playground',
+        component: () => import('@/views/PlaygroundView.vue'),
+        meta: { title: '参数调试', icon: 'ExperimentOutlined' },
+      },
+      {
         path: 'studio',
         name: 'studio',
         component: () => import('@/views/StudioView.vue'),

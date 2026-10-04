@@ -413,6 +413,25 @@ ImageResponse { created, model, images[], usage }
 - **计费**：图片生成没有 token 维度口径（`spec.Usage` 与 `call_logs` 均无「张数」字段），
   本次只落调用日志不做预扣结算；按张计费待后续补充。
 
+### 3.13 接入引导与参数调试
+
+对接成本主要卡在两件事上：不知道「该填什么」，以及不知道「参数为什么没生效」。
+因此把接入信息集中成一个独立入口，并提供可预演的参数调试：
+
+- **接入指南**：地址与鉴权、多语言示例、自定义参数传参方式、AI 客户端填法、常见问题。
+  客户端接入只收录确认兼容 OpenAI 协议的客户端，并直接给出「网关地址 + API Key + 模型名」
+  三项可复制值；GUI 客户端菜单位置随版本变化，因此给要点而非死记路径。
+- **参数调试**：`POST /api/v1/playground/params/preview` 走 `SelectChannel` 选出渠道后，
+  用**与真实转发完全相同的** `BuildUpstreamRequest` + `ApplyParams` 计算分配结果，
+  返回已应用 / 被丢弃 / 未标准化三组参数与最终上游请求体。
+  因为不发起上游请求，所以不消耗额度、不计入调用日志，可以放心反复试。
+- 被丢弃的参数会区分原因：渠道显式排除、协议无对应字段、能力未声明，
+  并指向「渠道 → 参数能力声明」这一处可操作的修改位置。
+
+> 边界说明：网关支持将 Anthropic 作为**上游**渠道，但未提供 Anthropic 原生**入站**入口
+> （`/v1/messages`），因此 Claude Code 与 CCSwitch 这类要求 Anthropic Messages API 的
+> 客户端目前无法直接指向本网关。
+
 ---
 
 ## 4. 数据模型清单
@@ -463,6 +482,7 @@ ImageResponse { created, model, images[], usage }
 | 用量 | `GET /api/v1/usage/logs`、`GET /api/v1/usage/summary` |
 | 绑定 | `GET /api/v1/account/bindings`、Passkey 注册 begin/finish、GitHub authorize/callback |
 | 绘图 | `GET /api/v1/studio/models`、`GET /api/v1/studio/prompts`、`POST /api/v1/studio/images`、`GET /api/v1/studio/works`、`DELETE /api/v1/studio/works/:id`、`GET /api/v1/studio/works/:id/images/:index` |
+| 参数调试 | `GET /api/v1/playground/models`、`POST /api/v1/playground/params/preview` |
 | 系统 | `GET /api/v1/system/info`、`GET /api/v1/system/status`、`POST /api/v1/system/install` |
 
 ### 5.3 管理侧接口
@@ -540,7 +560,8 @@ ReserveQuota(预估点数) ──► 上游调用 ──► Settle(真实点数)
 └── 主布局（BasicLayout：侧边导航 + 内容区）
     ├── 用户门户
     │   ├── 概览       余额 / 累计消耗 / 近 N 天请求与 Token / 用量趋势（ECharts）/ 快速接入示例
-    │   ├── 接入指南   网关地址、鉴权方式、Python / Node / cURL / Gemini 示例、常见问题
+    │   ├── 接入指南   地址与鉴权、多语言示例、自定义参数传参详解、AI 客户端接入、常见问题
+    │   ├── 参数调试   选模型与参数，预览分配结果（已应用 / 被丢弃及原因 / 未标准化）与最终上游请求体
     │   ├── 密钥管理   创建（明文仅一次）、列表、吊销、删除、累计用量
     │   ├── 调用历史   按模型 / 状态 / 时间筛选；token、点数、耗时、首字延迟、置信度
     │   └── 账号与安全 改密、Passkey、GitHub 绑定
