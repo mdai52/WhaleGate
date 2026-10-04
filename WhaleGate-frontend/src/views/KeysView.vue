@@ -85,7 +85,7 @@ function buildPayload() {
 
 const columns = [
   { title: '名称', dataIndex: 'name', key: 'name' },
-  { title: '密钥', dataIndex: 'masked_key', key: 'masked_key' },
+  { title: '密钥（打码）', dataIndex: 'masked_key', key: 'masked_key' },
   { title: '状态', dataIndex: 'status', key: 'status' },
   { title: '创建时间', dataIndex: 'created_at', key: 'created_at' },
   { title: '最近使用', dataIndex: 'last_used_at', key: 'last_used_at' },
@@ -368,7 +368,9 @@ onMounted(load)
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'masked_key'">
-            <code>{{ (record as APIKeyItem).masked_key }}</code>
+            <a-tooltip title="仅用于辨认是哪一个密钥，不能用于调用。完整明文只在创建时展示一次。">
+              <code>{{ (record as APIKeyItem).masked_key }}</code>
+            </a-tooltip>
           </template>
           <template v-else-if="column.key === 'status'">
             <a-tag :color="statusText(record as APIKeyItem).color">

@@ -57,7 +57,7 @@
 | name | varchar(64) | 密钥名称 |
 | key_hash | varchar(128) | 明文 SHA-256 十六进制摘要，唯一索引，用于反查 |
 | prefix | varchar(16) | 密钥前缀，默认 `sk-` |
-| masked_key | varchar(64) | 脱敏展示，仅保留末 4 位 |
+| masked_key | varchar(64) | 脱敏展示：保留前 6 位与末 4 位（形如 `sk-Ab3x...****`），仅用于辨认，不能用于调用 |
 | status | smallint | 1 正常 / 2 禁用 |
 | qpm | int | 每分钟请求上限，0 表示继承全局默认 |
 | concurrency | int | 并发上限，0 表示继承全局默认 |

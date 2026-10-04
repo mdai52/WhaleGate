@@ -29,13 +29,20 @@ func HashAPIKey(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// MaskAPIKey 生成用于展示的脱敏密钥：保留前缀与后 4 位。
+// MaskAPIKey 生成用于展示的脱敏密钥：保留头部与末 4 位，中间以省略号隐藏。
+//
+// 只保留 6 位头部与 4 位尾部：既能辨认是哪一个密钥，又不会把密钥暴露到近乎完整。
+// 旧实现仅隐藏末 4 位，列表里展示的字符串与真实密钥几乎一致，
+// 用户很容易当成完整密钥复制去调用，从而拿到「凭证无效」的 401。
 func MaskAPIKey(key string) string {
-	const visibleTail = 4
-	if len(key) <= visibleTail {
+	const (
+		headLen = 6
+		tailLen = 4
+	)
+	if len(key) <= headLen+tailLen {
 		return strings.Repeat("*", len(key))
 	}
-	return key[:len(key)-visibleTail] + strings.Repeat("*", visibleTail)
+	return key[:headLen] + "..." + key[len(key)-tailLen:]
 }
 
 // ConstantTimeEqual 以常量时间比较两个字符串，避免时序侧信道。

@@ -6,8 +6,9 @@
  * 且不向上游发起请求，可以放心反复试。
  */
 import { computed, onMounted, reactive, ref } from 'vue'
-import { CopyOutlined, PlayCircleOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, KeyOutlined, PlayCircleOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
+import { apiKeyApi } from '@/api/apikey'
 import { playgroundApi } from '@/api/playground'
 import type { ParamPreview, PlaygroundModel } from '@/api/playground'
 import KeyValueEditor from '@/components/KeyValueEditor.vue'
@@ -202,6 +203,58 @@ async function sendReal() {
   }
 }
 
+/**
+ * 把实测失败翻译成可操作的说明。
+ * 401「凭证无效」是最容易误解的一个：它指的是密钥，和所选模型无关，
+ * 而列表里展示的打码值形似完整密钥，最常被误复制。
+ */
+const realHint = computed(() => {
+  const res = realResult.value
+  if (!res || res.status < 400) {
+    return ''
+  }
+  if (res.status === 401) {
+    return (
+      '「凭证无效」表示这串密钥在网关里查不到，与所选模型无关——' +
+      '请求在鉴权阶段就被拦下，还没走到渠道。常见原因：' +
+      '① 复制的是密钥列表里打码后的展示值（形如 sk-Ab3x...****，只用于辨认，不能调用）；' +
+      '② 该密钥已被删除；③ 密钥来自其它网关。' +
+      '密钥明文只在创建成功那一刻展示一次，丢失后无法找回，需要重新创建。'
+    )
+  }
+  if (res.status === 403) {
+    return '密钥或账号处于禁用状态，也可能来源 IP 不在该密钥的白名单内。'
+  }
+  if (res.status === 402) {
+    return '额度不足，请在概览页查看余额或联系管理员充值。'
+  }
+  if (res.status === 429) {
+    return '触发限流：可能是该密钥的 QPM / 并发上限，也可能是上游自身限流。'
+  }
+  if (res.status >= 500) {
+    return '网关或上游异常，可在「调用历史」按 trace_id 查看详情。'
+  }
+  return ''
+})
+
+// ---------------------------------------------------------------- 临时调试密钥
+
+const creatingKey = ref(false)
+
+/** 手上没有可用明文时，直接建一个专用调试密钥并填入，用完可删除。 */
+async function createTempKey() {
+  creatingKey.value = true
+  try {
+    const res = await apiKeyApi.create({ name: '调试密钥（参数调试页生成）' })
+    realKey.value = res.key
+    message.success('已生成并填入调试密钥，用完可在「密钥管理」中删除')
+  } catch (e) {
+    message.error((e as Error).message || '创建调试密钥失败')
+  } finally {
+    creatingKey.value = false
+  }
+}
+
 onMounted(loadModels)
 </script>
 
@@ -376,22 +429,34 @@ onMounted(loadModels)
         show-icon
         style="margin-bottom: 12px"
         message="实测会真实调用上游并消耗额度"
-        description="用你自己的密钥打一次网关，响应头里的 X-WG-Params-Applied / X-WG-Params-Dropped 应与上面的预览一致。"
+        description="用你自己的密钥打一次网关，响应头里的 X-WG-Params-Applied / X-WG-Params-Dropped 应与上面的预览一致。这里必须填创建时展示的完整明文，密钥列表里的打码值（形如 sk-Ab3x...****）无法调用。"
       />
       <a-space wrap style="margin-bottom: 12px">
         <a-input-password
           v-model:value="realKey"
           addon-before="API Key"
-          placeholder="sk-..."
-          style="width: 340px"
+          placeholder="sk-...（创建时展示的完整明文）"
+          style="width: 360px"
         />
         <a-button type="primary" :loading="sending" @click="sendReal">
           <ThunderboltOutlined />
           发送真实请求
         </a-button>
+        <a-button :loading="creatingKey" @click="createTempKey">
+          <KeyOutlined />
+          生成调试密钥
+        </a-button>
       </a-space>
 
       <template v-if="realResult">
+        <a-alert
+          v-if="realHint"
+          type="error"
+          show-icon
+          :message="`HTTP ${realResult.status}`"
+          :description="realHint"
+          style="margin-bottom: 12px"
+        />
         <a-descriptions bordered size="small" :column="1">
           <a-descriptions-item label="HTTP 状态">{{ realResult.status }}</a-descriptions-item>
           <a-descriptions-item label="X-WG-Params-Applied">
