@@ -60,8 +60,9 @@ func (c *Container) CreateChannel(ctx context.Context, in ChannelInput) (*model.
 	if strings.TrimSpace(in.BaseURL) == "" {
 		return nil, apierr.New(apierr.ErrInvalidParam, "上游地址不能为空")
 	}
-	if in.Type != model.ChannelTypeOpenAI && in.Type != model.ChannelTypeGemini {
-		return nil, apierr.New(apierr.ErrInvalidParam, "渠道类型仅支持 openai 或 gemini")
+	if !model.IsSupportedChannelType(in.Type) {
+		return nil, apierr.Errorf(apierr.ErrInvalidParam, "渠道类型仅支持 %s",
+			strings.Join(model.SupportedChannelTypes(), " / "))
 	}
 
 	ch := &model.Channel{
@@ -135,8 +136,9 @@ func (c *Container) UpdateChannel(ctx context.Context, id uint, in ChannelInput)
 		patch["name"] = strings.TrimSpace(in.Name)
 	}
 	if in.Type != "" {
-		if in.Type != model.ChannelTypeOpenAI && in.Type != model.ChannelTypeGemini {
-			return nil, apierr.New(apierr.ErrInvalidParam, "渠道类型仅支持 openai 或 gemini")
+		if !model.IsSupportedChannelType(in.Type) {
+			return nil, apierr.Errorf(apierr.ErrInvalidParam, "渠道类型仅支持 %s",
+				strings.Join(model.SupportedChannelTypes(), " / "))
 		}
 		patch["type"] = in.Type
 	}
@@ -387,12 +389,14 @@ func (c *Container) TestChannel(ctx context.Context, ch *model.Channel) (map[str
 	}
 
 	url := strings.TrimRight(ch.BaseURL, "/")
-	headerName, headerValue := gateway.BuildUpstreamAuthHeader(ch.Type, key)
-	headers := map[string]string{}
-	if ch.Type == model.ChannelTypeGemini {
+	headers := gateway.BuildUpstreamHeaders(ch.Type, key)
+	switch {
+	case ch.Type == model.ChannelTypeGemini:
 		url += "/models?key=" + urlpkg.QueryEscape(key)
-	} else {
-		headers[headerName] = headerValue
+	case gateway.IsAnthropicLike(ch.Type):
+		// Anthropic 的地址可能带或不带 /v1 前缀，按约定补全。
+		url = gateway.AnthropicModelsURL(ch.BaseURL)
+	default:
 		url += "/models"
 	}
 

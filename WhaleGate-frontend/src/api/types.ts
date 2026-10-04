@@ -203,7 +203,8 @@ export interface Paged<T> {
 
 // ---------------------------------------------------------------- 渠道
 
-export type ChannelType = 'openai' | 'gemini'
+/** 渠道协议类型：openai 兼容 / gemini 原生 / anthropic 原生 / claude-code 网关 */
+export type ChannelType = 'openai' | 'gemini' | 'anthropic' | 'claude-code'
 
 /** 渠道状态：1 正常 / 2 人工禁用 / 3 自动熔断 */
 export type ChannelStatus = 1 | 2 | 3

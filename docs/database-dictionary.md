@@ -70,7 +70,7 @@
 | --- | --- | --- |
 | id | bigserial | 主键 |
 | name | varchar(128) | 渠道名称 |
-| type | varchar(32) | `openai` 兼容 / `gemini` 原生 |
+| type | varchar(32) | `openai` 兼容 / `gemini` 原生 / `anthropic` 原生 / `claude-code` 网关 |
 | base_url | varchar(512) | 上游地址 |
 | api_key | text | 上游静态密钥 **AES-256-GCM 密文**；绑定凭证时不生效 |
 | models | text | 支持的模型名 JSON 数组，空数组表示通配 |

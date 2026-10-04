@@ -7,10 +7,23 @@ package spec
 import "strings"
 
 // 协议标识。
+//
+// openai / gemini 既可作客户端入口也可作上游渠道；
+// anthropic / claude-code 目前只作为上游渠道类型使用，
+// 对外仍统一以 OpenAI 或 Gemini 协议输出（见 gateway.WriteClientResponse）。
 const (
 	ProtocolOpenAI = "openai"
 	ProtocolGemini = "gemini"
+	// ProtocolAnthropic Anthropic Messages API（x-api-key 鉴权）。
+	ProtocolAnthropic = "anthropic"
+	// ProtocolClaudeCode Claude Code 网关：Anthropic 消息结构 + Bearer 鉴权。
+	ProtocolClaudeCode = "claude-code"
 )
+
+// IsAnthropicLike 判断是否为 Anthropic 消息结构的协议。
+func IsAnthropicLike(protocol string) bool {
+	return protocol == ProtocolAnthropic || protocol == ProtocolClaudeCode
+}
 
 // 消息角色。
 const (

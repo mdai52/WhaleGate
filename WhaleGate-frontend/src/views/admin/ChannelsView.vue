@@ -50,6 +50,38 @@ const catalogModels = ref<ModelCatalog[]>([])
 const modelKeyword = ref('')
 const modelCapability = ref<string>('chat')
 
+/** 协议类型选项与标签展示（与后端 model.SupportedChannelTypes 保持一致） */
+const channelTypeMeta: Record<ChannelType, { label: string; color: string; hint: string }> = {
+  openai: { label: 'OpenAI 兼容', color: 'blue', hint: 'https://api.openai.com/v1' },
+  gemini: { label: 'Gemini 原生', color: 'purple', hint: 'https://generativelanguage.googleapis.com/v1beta' },
+  anthropic: {
+    label: 'Anthropic 原生',
+    color: 'orange',
+    hint: 'https://api.anthropic.com（x-api-key 鉴权）',
+  },
+  'claude-code': {
+    label: 'Claude Code 网关',
+    color: 'green',
+    hint: 'https://<网关地址>（Bearer 鉴权）',
+  },
+}
+
+const channelTypeOptions = Object.entries(channelTypeMeta).map(([value, meta]) => ({
+  value: value as ChannelType,
+  label: meta.label,
+  hint: meta.hint,
+}))
+
+/** 上游地址输入框的示例提示 */
+const baseURLPlaceholder = computed(() =>
+  channelTypeOptions.map((o) => `${o.value}: ${o.hint}`).join(' ｜ '),
+)
+
+/** 当前类型对应的标签颜色，未知类型回落灰色 */
+function typeColor(type: ChannelType): string {
+  return channelTypeMeta[type]?.color ?? 'default'
+}
+
 const capabilityMeta: Record<string, { text: string; color: string }> = {
   chat: { text: '对话', color: 'blue' },
   vision: { text: '视觉', color: 'cyan' },
@@ -407,8 +439,8 @@ load()
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'type'">
-            <a-tag :color="(record as Channel).type === 'gemini' ? 'purple' : 'blue'">
-              {{ (record as Channel).type }}
+            <a-tag :color="typeColor((record as Channel).type)">
+              {{ channelTypeMeta[(record as Channel).type]?.label ?? (record as Channel).type }}
             </a-tag>
           </template>
           <template v-else-if="column.key === 'base_url'">
@@ -462,10 +494,7 @@ load()
           </a-col>
           <a-col :xs="24" :md="12">
             <a-form-item label="协议类型" required>
-              <a-select v-model:value="form.type">
-                <a-select-option value="openai">OpenAI 兼容</a-select-option>
-                <a-select-option value="gemini">Gemini 原生</a-select-option>
-              </a-select>
+              <a-select v-model:value="form.type" :options="channelTypeOptions" />
             </a-form-item>
           </a-col>
         </a-row>
@@ -473,7 +502,7 @@ load()
         <a-form-item label="上游地址" required>
           <a-input
             v-model:value="form.base_url"
-            placeholder="openai: https://api.openai.com/v1 ｜ gemini: https://generativelanguage.googleapis.com/v1beta"
+            :placeholder="baseURLPlaceholder"
             allow-clear
           />
         </a-form-item>

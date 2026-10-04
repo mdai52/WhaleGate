@@ -76,7 +76,7 @@ func protocolOrder(hint string) []probeSpec {
 			Parse: parseOpenAIModels,
 		},
 		{
-			Type:  "anthropic",
+			Type:  spec.ProtocolAnthropic,
 			Paths: []string{"/v1/models", "/models"},
 			Headers: func(key string) map[string]string {
 				return map[string]string{
@@ -87,7 +87,7 @@ func protocolOrder(hint string) []probeSpec {
 			Parse: parseOpenAIModels,
 		},
 		{
-			Type:  "claude-code",
+			Type:  spec.ProtocolClaudeCode,
 			Paths: []string{"/v1/models"},
 			Headers: func(key string) map[string]string {
 				return map[string]string{

@@ -100,6 +100,17 @@ var geminiParamTargets = map[string]ParamTarget{
 	ParamResponseFormat: {Path: []string{"generationConfig", "responseMimeType"}, Convert: convertResponseFormat},
 }
 
+// anthropicParamTargets Anthropic Messages API 的参数映射。
+// Anthropic 原生不支持频率惩罚、seed、n、response_format 等 OpenAI 语义参数，
+// 因此这些参数不会出现在映射表中，会被自动丢弃以免上游报错。
+var anthropicParamTargets = map[string]ParamTarget{
+	ParamTemperature: {Path: []string{"temperature"}},
+	ParamTopP:        {Path: []string{"top_p"}},
+	ParamTopK:        {Path: []string{"top_k"}},
+	ParamMaxTokens:   {Path: []string{"max_tokens"}},
+	ParamStop:        {Path: []string{"stop_sequences"}},
+}
+
 // 协议默认支持的参数集（渠道未声明能力时使用）。
 var defaultSupportedParams = map[string][]string{
 	ProtocolOpenAI: {
@@ -109,6 +120,12 @@ var defaultSupportedParams = map[string][]string{
 	ProtocolGemini: {
 		ParamTemperature, ParamTopP, ParamTopK, ParamMaxTokens, ParamStop,
 		ParamFrequencyPenalty, ParamPresencePenalty, ParamSeed, ParamN, ParamResponseFormat,
+	},
+	ProtocolAnthropic: {
+		ParamTemperature, ParamTopP, ParamTopK, ParamMaxTokens, ParamStop,
+	},
+	ProtocolClaudeCode: {
+		ParamTemperature, ParamTopP, ParamTopK, ParamMaxTokens, ParamStop,
 	},
 }
 
@@ -207,8 +224,11 @@ func ApplyParams(
 	}
 
 	targets := openAIParamTargets
-	if channelType == ProtocolGemini {
+	switch {
+	case channelType == ProtocolGemini:
 		targets = geminiParamTargets
+	case IsAnthropicLike(channelType):
+		targets = anthropicParamTargets
 	}
 	supported := SupportedParams(channelType, schema)
 

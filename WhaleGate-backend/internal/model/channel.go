@@ -25,7 +25,31 @@ const (
 const (
 	ChannelTypeOpenAI = "openai"
 	ChannelTypeGemini = "gemini"
+	// ChannelTypeAnthropic Anthropic Messages API（x-api-key 鉴权）。
+	ChannelTypeAnthropic = "anthropic"
+	// ChannelTypeClaudeCode Claude Code 网关：Anthropic 消息结构 + Bearer 鉴权。
+	ChannelTypeClaudeCode = "claude-code"
 )
+
+// SupportedChannelTypes 返回全部受支持的渠道类型（用于参数校验与前端枚举）。
+func SupportedChannelTypes() []string {
+	return []string{
+		ChannelTypeOpenAI,
+		ChannelTypeGemini,
+		ChannelTypeAnthropic,
+		ChannelTypeClaudeCode,
+	}
+}
+
+// IsSupportedChannelType 判断渠道类型是否被转发层支持。
+func IsSupportedChannelType(t string) bool {
+	switch t {
+	case ChannelTypeOpenAI, ChannelTypeGemini, ChannelTypeAnthropic, ChannelTypeClaudeCode:
+		return true
+	default:
+		return false
+	}
+}
 
 // Channel 上游渠道。api_key 列存储 AES-256-GCM 密文。
 type Channel struct {

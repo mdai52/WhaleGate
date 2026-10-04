@@ -34,6 +34,10 @@ type (
 const (
 	ProtocolOpenAI = spec.ProtocolOpenAI
 	ProtocolGemini = spec.ProtocolGemini
+	// ProtocolAnthropic Anthropic Messages API。
+	ProtocolAnthropic = spec.ProtocolAnthropic
+	// ProtocolClaudeCode Claude Code 网关协议。
+	ProtocolClaudeCode = spec.ProtocolClaudeCode
 
 	RoleSystem    = spec.RoleSystem
 	RoleUser      = spec.RoleUser
@@ -47,3 +51,6 @@ const (
 
 // FinishReasonPtr 便捷构造结束原因指针。
 var FinishReasonPtr = spec.FinishReasonPtr
+
+// IsAnthropicLike 判断是否为 Anthropic 消息结构的协议。
+var IsAnthropicLike = spec.IsAnthropicLike

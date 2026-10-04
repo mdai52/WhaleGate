@@ -62,7 +62,7 @@
                 │
 ┌───────────────▼──────────────────────────────────────────────┐
 │ 适配层  Adapter Layer                                         │
-│  OpenAI 适配器   ·   Gemini 适配器   ·   自定义协议适配器      │
+│  OpenAI 适配器   ·   Gemini 适配器   ·   Anthropic 适配器      │
 └───────────────┬──────────────────────────────────────────────┘
                 │
 ┌───────────────▼──────────────────────────────────────────────┐
@@ -98,7 +98,7 @@
 │       ├── middleware/        # 鉴权 / 限流 / 日志 / 恢复
 │       ├── model/             # GORM 数据模型
 │       ├── pkg/               # 基础包
-│       │   ├── gateway/       # 协议适配（spec / openai / gemini）
+│       │   ├── gateway/       # 协议适配（spec / openai / gemini / anthropic）
 │       │   ├── ratelimit/     # 限流器
 │       │   ├── crypto/ jwt/   # 加解密与令牌
 │       │   ├── cache/ database/ logger/ response/ apierr/
@@ -131,7 +131,9 @@
 ### 3.2 归一化层（协议适配核心）
 
 **唯一内部契约**：`internal/pkg/gateway/spec` 中的 `UnifiedRequest` / `UnifiedResponse`。
-任何协议的请求先转成它，任何渠道的响应也先转成它，因此 **OpenAI ↔ Gemini 可以互相转发**。
+任何协议的请求先转成它，任何渠道的响应也先转成它，因此 **OpenAI ↔ Gemini ↔ Anthropic 之间可以任意互转**。
+上游为 Anthropic（含 Claude Code 网关）时，工具调用参数由 `input_json_delta` 分片下发，
+需按请求持有有状态的 `StreamDecoder` 跨事件累积后再整体下发。
 
 #### 3.2.1 非标扩展归一
 
@@ -163,8 +165,11 @@ SSE 逐块转换，**禁止攒齐整包再吐**。OpenAI SSE 与 Gemini `streamG
 
 #### 3.3.2 自动探测
 
-只填「上游地址 + 密钥」点「自动探测模型」：探测服务逐个尝试 OpenAI 兼容入口与 Gemini 原生入口，
+只填「上游地址 + 密钥」点「自动探测模型」：探测服务按
+OpenAI 兼容（`/models`）→ Anthropic 原生（`/v1/models` + `x-api-key`）→
+Claude Code 网关（`/v1/models` + `Bearer`）→ Codex → Gemini 原生（`?key=`）顺序逐个尝试，
 命中后拉取模型列表并推断能力（是否支持流式 / 工具调用 / 视觉 / 生图），写入渠道记录。
+探测到的原生协议会自动归一化到网关支持的渠道类型：Anthropic / Claude Code 保留原生协议，Codex 归为 OpenAI 兼容。
 编辑渠道时可复用已保存密钥完成探测，无需重新输入。
 
 #### 3.3.3 模型别名与参数注入
@@ -441,7 +446,7 @@ ALTER TABLE api_keys ADD COLUMN group_id BIGINT REFERENCES groups (id);
 5. 模型可用性：group_models 过滤 + 倍率解析（分组 > 全局 > 兜底）
 6. 路由：模型名 → 渠道（加权选择，跳过禁用渠道）
 7. 参数装配：归一 → 能力协商 → 协议映射 → 别名/渠道 override 合并
-8. 转发：OpenAI 适配器或 Gemini 适配器；流式则逐块转换 SSE
+8. 转发：OpenAI / Gemini / Anthropic 适配器；流式则逐块转换 SSE
 9. 响应归一 → UnifiedResponse → 按入口协议输出
 10. 结算 Settle（多退少补，失败全额回补）
 11. 落库：call_logs 异步批量写入；释放并发计数
@@ -535,7 +540,7 @@ ReserveQuota(预估点数) ──► 上游调用 ──► Settle(真实点数)
 
 | 阶段 | 内容 | 优先级 |
 | --- | --- | --- |
-| 已交付 | 用户与密钥、协议适配（OpenAI/Gemini 互转）、渠道自动探测、别名与参数注入、计量计费、调用日志、MCP 与技能、Passkey / GitHub 绑定、TLS | — |
+| 已交付 | 用户与密钥、协议适配（OpenAI/Gemini/Anthropic 互转）、渠道自动探测（含 Anthropic / Claude Code 原生协议）、别名与参数注入、计量计费、调用日志、MCP 与技能、Passkey / GitHub 绑定、TLS | — |
 | 本次设计 | **分组与分组级限流、分组级模型可用性与倍率覆盖** | P0 |
 | 下一步 | 渠道级熔断指标看板、按用户维度的图表下钻、告警通知（Webhook / 企业微信） | P1 |
 | 中期 | 提示词内容安全钩子、请求重放与灰度分流、模型成本估算与预算告警 | P2 |

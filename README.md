@@ -283,7 +283,7 @@ docker compose logs app | grep -i password
 ### 统一内部格式
 
 所有外部协议先转换为 `UnifiedRequest` / `UnifiedResponse`（见 `internal/pkg/gateway/spec`），
-再由渠道适配器转换为上游协议，因此 OpenAI 与 Gemini 可以互相转发。
+再由渠道适配器转换为上游协议，因此 OpenAI / Gemini / Anthropic 之间可以任意互转转发。
 
 - **非标扩展归一**：上游的 `message.images[]`（data URI）与 Gemini `inlineData`
   统一收敛到 `Images` 字段；输出侧按目标协议决定还原方式
@@ -306,7 +306,8 @@ docker compose logs app | grep -i password
 
 ### 统一 OpenAI 协议分发
 
-对外统一以 OpenAI 协议（`/v1/chat/completions`）分发：任何渠道（OpenAI 兼容 / Gemini 原生）的响应
+对外统一以 OpenAI 协议（`/v1/chat/completions`）分发：任何渠道
+（OpenAI 兼容 / Gemini 原生 / Anthropic 原生 / Claude Code 网关）的响应
 都先归一为 `UnifiedResponse`，再以 OpenAI 格式返回，客户端无需关心上游协议。
 `/v1/models` 汇总所有渠道（含别名）支持的模型。
 

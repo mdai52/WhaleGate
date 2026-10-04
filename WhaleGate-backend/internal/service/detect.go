@@ -30,7 +30,7 @@ type DetectInput struct {
 type DetectResult struct {
 	// DetectedType 探测到的原始协议：openai / anthropic / claude-code / codex / gemini。
 	DetectedType string `json:"detected_type"`
-	// SuggestedType 建议的渠道类型（归一化到网关支持的 openai / gemini）。
+	// SuggestedType 建议的渠道类型（归一化到网关支持的 openai / gemini / anthropic / claude-code）。
 	SuggestedType string `json:"suggested_type"`
 	// BaseURL 规范化后的地址。
 	BaseURL string `json:"base_url"`
@@ -111,8 +111,8 @@ func (c *Container) DetectChannel(ctx context.Context, in DetectInput) (*DetectR
 		}
 	}
 	if out.SuggestedType != probe.Type {
-		out.Warning = "检测到 " + probe.Type + " 原生协议，本网关转发仅支持 OpenAI 兼容与 Gemini 原生；" +
-			"若该上游提供 OpenAI 兼容端点，请改用对应地址后再探测。"
+		out.Warning = "检测到 " + probe.Type + " 原生协议，已转换为 " + out.SuggestedType +
+			" 渠道类型转发；若该上游另提供 OpenAI 兼容端点，也可改用对应地址后重新探测。"
 	}
 
 	// 异步落模型目录，不阻塞探测响应。
@@ -122,11 +122,18 @@ func (c *Container) DetectChannel(ctx context.Context, in DetectInput) (*DetectR
 }
 
 // normalizeChannelType 把探测协议归一化到网关支持的渠道类型。
+// codex 与各类 OpenAI 兼容网关统一按 openai 处理；anthropic / claude-code 保留原生协议。
 func normalizeChannelType(detected string) string {
-	if detected == model.ChannelTypeGemini {
+	switch detected {
+	case model.ChannelTypeGemini:
 		return model.ChannelTypeGemini
+	case gateway.ProtocolAnthropic:
+		return model.ChannelTypeAnthropic
+	case gateway.ProtocolClaudeCode:
+		return model.ChannelTypeClaudeCode
+	default:
+		return model.ChannelTypeOpenAI
 	}
-	return model.ChannelTypeOpenAI
 }
 
 // suggestName 依据地址与协议推断渠道名。

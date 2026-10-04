@@ -411,8 +411,7 @@ func (h *RelayHandler) forward(
 
 	upstreamReqModel := upstreamReq.Model
 	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamReqModel, req.Stream)
-	headerName, headerValue := gateway.BuildUpstreamAuthHeader(channel.Type, apiKey)
-	headers := map[string]string{headerName: headerValue}
+	headers := gateway.BuildUpstreamHeaders(channel.Type, apiKey)
 
 	upstream := gateway.NewUpstream(channelTimeout(h.svc, channel))
 	if req.Stream {
@@ -483,6 +482,8 @@ func (h *RelayHandler) forwardStream(
 	flusher, _ := c.Writer.(http.Flusher)
 
 	scanner := gateway.NewSSEScanner(resp.Body)
+	// 按协议选择解码器：Anthropic 的工具参数分片下发，解码器需贯穿整个流。
+	decoder := gateway.NewStreamDecoder(channel.Type)
 	usage := &gateway.Usage{}
 	var firstToken time.Duration
 	start := time.Now()
@@ -502,7 +503,7 @@ func (h *RelayHandler) forwardStream(
 			break
 		}
 
-		chunk, err := gateway.ParseUpstreamStreamEvent(channel.Type, payload)
+		chunk, err := decoder.Decode(payload)
 		if err != nil || chunk == nil {
 			continue
 		}
