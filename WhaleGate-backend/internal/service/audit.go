@@ -156,6 +156,26 @@ func (c *Container) Audit(entry AuditEntry) {
 	})
 }
 
+// ListUserSecurityEvents 返回用户自己的最近安全事件，供「账号与安全」展示。
+//
+// 只取本人记录、固定条数、不开放筛选：这是用户自助视图，
+// 完整检索能力仍在管理端「安全审计」。
+func (c *Container) ListUserSecurityEvents(
+	ctx context.Context, userID uint, limit int,
+) ([]model.AuditLog, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var list []model.AuditLog
+	err := c.DB.WithContext(ctx).Model(&model.AuditLog{}).
+		Where("user_id = ?", userID).
+		Order("id DESC").Limit(limit).Find(&list).Error
+	if err != nil {
+		return nil, apierr.Wrap(apierr.ErrDatabase, err)
+	}
+	return list, nil
+}
+
 // ListAuditLogs 分页查询审计日志（管理端）。
 func (c *Container) ListAuditLogs(ctx context.Context, f AuditFilter) ([]model.AuditLog, int64, error) {
 	page, pageSize := normalizePage(f.Page, f.PageSize)

@@ -2,6 +2,7 @@ import { request } from './http'
 import type {
   BindingsResult,
   LoginResult,
+  SecurityEvent,
   UserIdentity,
   UserProfile,
   WebAuthnCredential,
@@ -11,6 +12,10 @@ export const accountApi = {
   /** 第三方绑定与通行密钥列表 */
   bindings() {
     return request<BindingsResult>({ url: '/account/bindings', method: 'GET' })
+  },
+  /** 本人最近的安全事件：登录、改密、绑定等审计留痕 */
+  securityEvents() {
+    return request<SecurityEvent[]>({ url: '/account/security-events', method: 'GET' })
   },
   /** 更新当前用户资料 */
   updateProfile(payload: { username: string; email?: string; nickname?: string }) {

@@ -38,6 +38,12 @@ type Storage interface {
 	// Open 读取对象，仅在 PublicURL 返回空（无公开地址）时由服务端代理回读。
 	// 调用方负责关闭返回的 ReadCloser。
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
+	// Size 返回对象字节数。视频回读需要它来应答 HTTP Range；
+	// 取不到时返回错误，调用方按整对象（200 全量）处理。
+	Size(ctx context.Context, key string) (int64, error)
+	// OpenRange 读取对象的字节区间 [start, end]（两端含）。
+	// 用于视频分段回读（拖动进度条）；后端也可回退为整对象。
+	OpenRange(ctx context.Context, key string, start, end int64) (io.ReadCloser, error)
 	// Delete 删除指定前缀下的全部对象，用于回收一件作品的全部图片。
 	Delete(ctx context.Context, prefix string) error
 	// PublicURL 返回可直接访问的地址；为空表示需要经服务端鉴权后代理回读。

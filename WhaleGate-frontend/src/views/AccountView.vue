@@ -12,6 +12,7 @@ import {
   MailOutlined,
   PlusOutlined,
   SafetyCertificateOutlined,
+  HistoryOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
@@ -22,13 +23,52 @@ import {
   serializeAttestation,
   toCreationOptions,
 } from '@/utils/webauthn'
-import type { BindingsResult, UserIdentity, WebAuthnCredential } from '@/api/types'
+import type {
+  BindingsResult,
+  SecurityEvent,
+  UserIdentity,
+  WebAuthnCredential,
+} from '@/api/types'
 
 const userStore = useUserStore()
 
 const loading = ref(false)
 const binding = ref(false)
 const data = ref<BindingsResult | null>(null)
+
+// 安全事件
+const events = ref<SecurityEvent[]>([])
+const eventsLoading = ref(false)
+
+async function loadEvents() {
+  eventsLoading.value = true
+  try {
+    events.value = await accountApi.securityEvents()
+  } catch {
+    events.value = []
+  } finally {
+    eventsLoading.value = false
+  }
+}
+
+const eventLabels: Record<string, string> = {
+  login: '登录',
+  logout: '登出',
+  register: '注册',
+  change_password: '修改密码',
+  'key.create': '创建密钥',
+  'key.update': '更新密钥',
+  'key.revoke': '吊销密钥',
+  'key.delete': '删除密钥',
+  'identity.bind': '绑定第三方账号',
+  'identity.unbind': '解绑第三方账号',
+  'passkey.register': '添加通行密钥',
+  'passkey.delete': '删除通行密钥',
+}
+
+function eventLabel(action: string) {
+  return eventLabels[action] ?? action
+}
 
 const githubBound = computed<UserIdentity | undefined>(() =>
   data.value?.identities.find((i) => i.provider === 'github'),
@@ -241,7 +281,10 @@ async function saveProfile() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadEvents()
+})
 </script>
 
 <template>
@@ -444,6 +487,49 @@ onMounted(load)
             </a-space>
           </div>
         </div>
+      </section>
+
+      <!-- 安全事件：本人最近登录、改密、绑定等审计留痕 -->
+      <section class="wg-section-block">
+        <div class="wg-section-header">
+          <h3 class="wg-section-title"><HistoryOutlined /> 最近安全事件</h3>
+          <a-button size="small" :loading="eventsLoading" @click="loadEvents">刷新</a-button>
+        </div>
+        <a-alert
+          v-if="events.length === 0 && !eventsLoading"
+          type="info"
+          show-icon
+          message="暂无记录"
+          description="登录、修改密码、绑定第三方账号等操作会在这里留痕。"
+          style="padding: 24px 0"
+        />
+        <a-list v-else size="small" :data-source="events">
+          <template #renderItem="{ item }">
+            <a-list-item>
+              <a-list-item-meta>
+                <template #title>
+                  <a-space :size="[4, 4]" wrap>
+                    <a-tag :color="(item as SecurityEvent).status === 1 ? 'green' : 'red'">
+                      {{ (item as SecurityEvent).status === 1 ? '成功' : '失败' }}
+                    </a-tag>
+                    <span>{{ eventLabel((item as SecurityEvent).action) }}</span>
+                    <span class="wg-muted">
+                      {{ formatTime((item as SecurityEvent).created_at) }}
+                    </span>
+                  </a-space>
+                </template>
+                <template #description>
+                  <span class="wg-muted">
+                    {{ (item as SecurityEvent).ip || '未知来源' }}
+                    <template v-if="(item as SecurityEvent).detail">
+                      · {{ (item as SecurityEvent).detail }}
+                    </template>
+                  </span>
+                </template>
+              </a-list-item-meta>
+            </a-list-item>
+          </template>
+        </a-list>
       </section>
     </a-card>
 

@@ -217,13 +217,19 @@ func CollectParams(u *spec.UnifiedRequest) map[string]interface{} {
 	return params
 }
 
-// ApplyParams 按渠道能力把参数写入上游请求体：
-// 支持的参数写入协议对应路径，不支持的从请求体中移除（避免上游报错）。
+// ApplyParams 按渠道能力把参数写入上游请求体。
+//
+// passthrough 为 false（历史行为）：支持的参数写入协议对应路径，
+// 不支持的从请求体中移除，避免上游报错。
+// passthrough 为 true：能力表之外的参数不再丢弃，而是原样写入上游请求体
+// （有协议映射的仍走映射），由上游决定是否接受——不支持时上游报错并原样
+// 返回给调用方。管理员显式 exclude 的参数仍然丢弃，管理员意图优先于透传。
 func ApplyParams(
 	payload map[string]interface{},
 	channelType string,
 	params map[string]interface{},
 	schema *spec.ParamSchema,
+	passthrough bool,
 ) ParamReport {
 	report := ParamReport{Applied: []string{}, Dropped: []string{}}
 	if payload == nil {
@@ -238,6 +244,7 @@ func ApplyParams(
 		targets = anthropicParamTargets
 	}
 	supported := SupportedParams(channelType, schema)
+	excluded := excludedParams(schema)
 
 	// 默认值：仅在用户未显式提供时生效。
 	for name, value := range schemaDefaults(schema) {
@@ -255,12 +262,25 @@ func ApplyParams(
 	for _, name := range names {
 		value := params[name]
 		target, hasTarget := targets[name]
-		if _, ok := supported[name]; !ok || !hasTarget {
-			// 上游不支持或协议无对应字段：丢弃，并清理适配器可能已写入的值。
+		_, isExcluded := excluded[name]
+		if isExcluded || (!hasKey(supported, name) && hasTarget) {
+			// 管理员显式排除，或渠道能力表声明不支持且有协议字段：
+			// 丢弃并清理适配器可能已写入的值。
 			if hasTarget {
 				deletePath(payload, target.Path)
 			}
 			report.Dropped = append(report.Dropped, name)
+			continue
+		}
+		if !hasTarget {
+			if !passthrough {
+				// 协议无对应字段（含一切自定义参数）：非透传模式下丢弃。
+				report.Dropped = append(report.Dropped, name)
+				continue
+			}
+			// 透传模式：自定义参数按原始名写入顶层，交给上游裁决。
+			payload[name] = value
+			report.Applied = append(report.Applied, name)
 			continue
 		}
 
@@ -279,6 +299,31 @@ func ApplyParams(
 		}
 	}
 	return report
+}
+
+// ResolvePassthrough 解析透传开关：渠道 param_schema 显式声明优先，否则用全局默认。
+func ResolvePassthrough(schema *spec.ParamSchema, globalDefault bool) bool {
+	if schema != nil && schema.Passthrough != nil {
+		return *schema.Passthrough
+	}
+	return globalDefault
+}
+
+func hasKey(set map[string]struct{}, key string) bool {
+	_, ok := set[key]
+	return ok
+}
+
+// excludedParams 取渠道显式排除的参数名集合。
+func excludedParams(schema *spec.ParamSchema) map[string]struct{} {
+	if schema == nil || len(schema.Exclude) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(schema.Exclude))
+	for _, name := range schema.Exclude {
+		set[NormalizeParamName(name)] = struct{}{}
+	}
+	return set
 }
 
 func schemaDefaults(schema *spec.ParamSchema) map[string]interface{} {

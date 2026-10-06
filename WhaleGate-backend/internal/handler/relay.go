@@ -382,11 +382,7 @@ func currentKeyIdentity(c *gin.Context) *service.KeyIdentity {
 // 按请求解析而不是折进 KeyIdentity：密钥缓存最长 24 小时，
 // 折进去会让管理员调整分组倍率后长时间不生效。
 func (h *RelayHandler) groupMultiplier(c *gin.Context) float64 {
-	idn := currentKeyIdentity(c)
-	if idn == nil {
-		return 1
-	}
-	return h.svc.GroupPolicyFor(c.Request.Context(), idn.GroupTag).RatioMultiplier
+	return groupMultiplier(h.svc, c)
 }
 
 // relayOutcome 一次转发的结果摘要。
@@ -430,7 +426,8 @@ func (h *RelayHandler) forward(
 	}
 
 	// 自定义参数自动识别与分配：按上游声明的能力写入对应协议字段，不支持的丢弃。
-	report := gateway.ApplyParams(payload, channel.Type, gateway.CollectParams(req), channel.Schema())
+	passthrough := gateway.ResolvePassthrough(channel.Schema(), h.svc.ParamPassthrough())
+	report := gateway.ApplyParams(payload, channel.Type, gateway.CollectParams(req), channel.Schema(), passthrough)
 	if len(report.Applied) > 0 {
 		c.Header(headerParamsApplied, strings.Join(report.Applied, ","))
 	}
@@ -642,12 +639,21 @@ func isRetryable(err error) bool {
 }
 
 // writeRelayError 统一输出转发错误。
+//
+// 明细优先：上游返回的错误（"上游返回 400: {...}"）、参数被丢弃的原因等
+// 都在 Detail 里，调用方需要看到真实原因才能自行修正；
+// 只有 Detail 为空的内部错误（如网络异常）才回退到统一文案，
+// 避免把内部实现细节暴露出去。
 func writeRelayError(c *gin.Context, clientProtocol string, err error) {
 	if err == nil {
 		return
 	}
 	be := apierr.From(err)
-	gateway.WriteClientError(clientProtocol, c, be.HTTP, be.Message)
+	message := be.Message
+	if be.Detail != "" {
+		message = be.Detail
+	}
+	gateway.WriteClientError(clientProtocol, c, be.HTTP, message)
 }
 
 func logRelaySuccess(svc *service.Container, channel *model.Channel, req *gateway.UnifiedRequest, outcome *relayOutcome, start time.Time) {

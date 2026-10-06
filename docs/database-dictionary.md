@@ -16,14 +16,16 @@
 | `api_keys` | API Key 表：明文仅创建时返回一次，库中只存 SHA-256 摘要 |
 | `channels` | 上游渠道表：上游密钥与注入参数加密存储 |
 | `credentials` | OAuth 凭证表（认证文件）：令牌加密存储 |
-| `model_ratios` | 模型倍率表：点 / 1K tokens，`*` 为兜底 |
+| `model_ratios` | 模型倍率表：点 / 1K tokens（`image_ratio` 为点 / 张），`*` 为兜底 |
 | `key_groups` | API Key 分组：倍率系数与 QPM / 并发上限的预设 |
-| `call_logs` | 调用日志表：模型、渠道、耗时、token、点数、置信度 |
+| `call_logs` | 调用日志表：模型、渠道、耗时、token、点数、图片张数、置信度 |
 | `user_identities` | 第三方身份绑定表（GitHub 等） |
 | `webauthn_credentials` | 通行密钥（WebAuthn）凭证表 |
 | `audit_logs` | 审计日志表：安全相关操作留痕 |
 | `prompt_templates` | 绘图工作台提示词词库 |
 | `image_works` | 绘图工作台生成作品 |
+| `video_scripts` | 视频工作台：大模型生成的分镜脚本 |
+| `video_works` | 视频工作台：视频生成作品（异步任务） |
 
 金额统一以「点」为单位：**1 点 = 0.001 元**（见 `constant.PointsPerYuan`）。
 倍率单位为 **点 / 1K tokens**。
@@ -143,6 +145,8 @@
 | model | varchar(128) | 模型名，`*` 表示兜底 |
 | prompt_ratio | double | 点 / 1K prompt tokens |
 | completion_ratio | double | 点 / 1K completion tokens（**含思维链**） |
+| image_ratio | double | 生图单价：点 / 张。**0 表示未单独配置**，继承兜底单价；要全局免费应把 `gateway.default_image_ratio` 配成 0 |
+| video_ratio | double | 视频单价：点 / 秒。**0 表示未单独配置**，继承兜底单价；要全局免费应把 `gateway.default_video_ratio` 配成 0 |
 | enabled | boolean | 是否启用 |
 | created_at / updated_at / deleted_at | timestamptz | 时间戳与软删除 |
 
@@ -161,7 +165,9 @@
 | completion_tokens | int | 输出 token（含思维链） |
 | reasoning_tokens | int | 思维链 token，已计入 completion_tokens |
 | total_tokens | int | 总 token |
-| points | bigint | 实际扣减点数 |
+| points | bigint | 实际扣减点数；生图为「单价 × 张数」 |
+| image_count | integer | 生图调用实际生成的张数，非生图调用为 0 |
+| video_seconds | integer | 视频调用实际生成的秒数，非视频调用为 0 |
 | latency_ms / first_token_ms | bigint | 端到端耗时 / 首字延迟 |
 | status | smallint | 1 成功 / 2 失败 |
 | http_status | int | HTTP 状态码 |
@@ -233,12 +239,13 @@
 
 ## prompt_templates · 提示词词库
 
-绘图工作台的提示词模板，由迁移内置种子数据，供创作面板一键套用。
+绘图工作台与视频工作台共用的模板表，由迁移内置种子数据，供创作面板一键套用。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | id | bigserial | 主键 |
-| category | varchar(32) | 分类键：portrait / product / poster / infographic / design / illustration / photo / editing / typography / brand |
+| kind | varchar(16) | 词库类型：`image` 绘图提示词（默认）/ `video` 视频脚本模板 |
+| category | varchar(32) | 分类键：image 为 portrait / product / poster / infographic / design / illustration / photo / editing / typography / brand；video 为 promo / knowledge / story / vlog / food / tutorial / teaser |
 | title | varchar(128) | 标题 |
 | summary | varchar(255) | 摘要，卡片副标题 |
 | prompt | text | 提示词正文，可直接送入生图接口 |
@@ -269,7 +276,59 @@
 | error_message | text | 失败原因 |
 | image_count | integer | 成功生成的图片张数 |
 | latency_ms | integer | 端到端耗时 |
+| points | bigint | 本次生成扣除的点数；自用模式下记录应扣点数但不扣余额 |
+| self_use | boolean | 是否发生在自用模式下（免费） |
 | source | varchar(16) | 来源：studio / api |
 | created_at / updated_at | timestamptz | 时间戳 |
 
 索引：`(user_id, created_at DESC)`、`(status)`、`(channel_id)`。
+
+## video_scripts · 视频分镜脚本
+
+一次脚本创作对应一行；脚本由对话模型按结构化 JSON 产出，可直接拆成镜头提示词送进视频模型。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | bigserial | 主键 |
+| user_id / api_key_id / channel_id | bigint | 归属用户、发起密钥与实际处理的渠道 |
+| model | varchar(128) | 用于创作脚本的对话模型 |
+| title | varchar(255) | 脚本标题，模型生成或取自主题 |
+| brief | text | 创作需求：主题、风格、受众等 |
+| params | text | 生成参数 JSON：style / audience / duration / scenes / template_id |
+| script | text | 分镜 JSON 数组：`[{index,title,visual,narration,camera,seconds,prompt}]` |
+| scene_count | integer | 镜头数 |
+| total_seconds | integer | 建议总时长（秒），由各镜头时长求和 |
+| status | smallint | 1 成功 / 2 失败 |
+| error_message | text | 失败原因 |
+| points | bigint | 本次创作扣除的点数（**按 token 计费**） |
+| self_use | boolean | 是否发生在自用模式下（免费） |
+| latency_ms | integer | 端到端耗时 |
+| created_at / updated_at | timestamptz | 时间戳 |
+
+索引：`(user_id, created_at DESC)`。
+
+## video_works · 视频生成作品
+
+一次视频生成任务对应一行。视频是异步任务，因此比图片多两档状态。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | bigserial | 主键，同时作为视频目录名（`video/{id}/0.mp4`） |
+| user_id / api_key_id / channel_id | bigint | 归属用户、发起密钥与实际处理的渠道 |
+| model | varchar(128) | 对外模型名 |
+| upstream_model | varchar(128) | 经别名/映射改写后的上游模型名 |
+| prompt / negative_prompt | text | 画面提示词与不希望出现的元素 |
+| params | text | 生成参数 JSON：seconds / size / aspect_ratio / fps / script_id / scene_index |
+| videos | text | 结果 JSON 数组：`[{storage,key,url,mime_type,duration_sec}]`，键规则与图片一致 |
+| status | smallint | 0 排队中 / 1 生成中 / 2 成功 / 3 失败 |
+| task_id | varchar(128) | 上游任务 ID，用于轮询与取内容 |
+| progress | integer | 上游上报的进度百分比（0-100） |
+| duration_sec | integer | 实际生成秒数，**按秒计费的计量单位** |
+| error_message | text | 失败原因（含超时放弃） |
+| points | bigint | 本次生成扣除的点数；自用模式下记录应扣点数但不扣余额 |
+| self_use | boolean | 是否发生在自用模式下（免费） |
+| source | varchar(16) | 来源：studio / api |
+| latency_ms | integer | 端到端耗时 |
+| created_at / updated_at | timestamptz | 时间戳 |
+
+索引：`(user_id, created_at DESC)`、`(status)`。

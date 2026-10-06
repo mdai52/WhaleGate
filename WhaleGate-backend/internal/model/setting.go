@@ -25,6 +25,15 @@ const (
 	// SettingPasskeyRPOrigins 通行密钥允许的源地址，多个以英文逗号分隔。
 	SettingPasskeyRPOrigins = "passkey_rp_origins"
 
+	// ---------------------------------------------------------------- 接入与工作台
+
+	// SettingParamPassthrough 自定义参数透传：能力表之外的参数转发给上游。
+	SettingParamPassthrough = "param_passthrough"
+	// SettingAllowRegistration 是否开放注册（false 时仅管理员可创建用户）。
+	SettingAllowRegistration = "allow_registration"
+	// SettingVideoMaxSeconds 视频单次生成最大秒数。
+	SettingVideoMaxSeconds = "video_max_seconds"
+
 	// ---------------------------------------------------------------- 绘图工作台存储
 
 	// SettingStudioStorageDriver 存储后端：local 本地磁盘 / s3 对象存储。

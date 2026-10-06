@@ -4,6 +4,15 @@
  * 统一放在一处，避免「接入指南」页与「密钥管理」页各维护一份而逐渐不一致。
  */
 
+/** 可下载的配置片段 */
+export interface ClientConfigFile {
+  filename: string
+  /** 文件内容 */
+  text: string
+  /** MIME，浏览器下载时用于区分类型 */
+  mime: string
+}
+
 export interface ClientPreset {
   key: string
   name: string
@@ -12,8 +21,14 @@ export interface ClientPreset {
   endpoint: 'with-v1' | 'root'
   /** 填写要点 */
   tips: string[]
-  /** 可下载的配置文件名；不填表示该客户端无标准配置文件 */
-  filename?: string
+  /**
+   * 可下载的配置文件。
+   *
+   * 只在该客户端确实以配置文件方式接入时才提供——GUI 客户端（Cherry Studio、
+   * Cursor 等）没有可导入的配置文件，硬造一个 .json 只会让用户拿着无效文件
+   * 去导入然后失败，不如不给下载按钮。
+   */
+  config?: (ctx: ClientContext) => ClientConfigFile
 }
 
 /** 生成配置所需的三要素 */
@@ -37,7 +52,20 @@ export const CLIENT_PRESETS: ClientPreset[] = [
       'CCSwitch：新增供应商，类型选 Claude Code，Base URL 与 Token 填下面两个值',
       '也可把 env 写进 Claude Code 的 settings.json',
     ],
-    filename: 'whalegate-claude-code.sh',
+    config: (ctx) => {
+      const key = ctx.apiKey.trim() || '<在此填入完整密钥>'
+      return {
+        filename: 'whalegate-claude-code.sh',
+        mime: 'text/plain;charset=utf-8',
+        text: `#!/usr/bin/env bash
+# 鲸闸 WhaleGate · Claude Code 接入
+# 用法：source ./whalegate-claude-code.sh
+
+export ANTHROPIC_BASE_URL="${ctx.origin}"
+export ANTHROPIC_AUTH_TOKEN="${key}"
+`,
+      }
+    },
   },
   {
     key: 'cherry-studio',
@@ -49,7 +77,8 @@ export const CLIENT_PRESETS: ClientPreset[] = [
       'API 地址填下方地址，API 密钥填完整明文',
       '在「模型」里点添加，填入要使用的模型名',
     ],
-    filename: 'whalegate-openai.json',
+    // Cherry Studio 没有可导入的提供商配置文件，只能按上面要点在界面里填写；
+    // 此前下载的是一个 .json 后缀的纯文本，导入会失败，因此不再提供下载。
   },
   {
     key: 'chatbox',
@@ -126,12 +155,40 @@ export const CLIENT_PRESETS: ClientPreset[] = [
       '编辑 config.json 的 models 数组，新增一条 provider 为 openai 的配置',
       'apiBase 填下方地址，apiKey 填完整明文，model 填模型名',
     ],
+    config: (ctx) => {
+      const key = ctx.apiKey.trim() || '<在此填入完整密钥>'
+      const model = (ctx.model ?? '').trim() || '<模型名>'
+      return {
+        filename: 'whalegate-continue.json',
+        mime: 'application/json;charset=utf-8',
+        text: JSON.stringify(
+          {
+            models: [
+              {
+                title: `WhaleGate · ${model}`,
+                provider: 'openai',
+                model,
+                apiBase: `${ctx.origin}/v1`,
+                apiKey: key,
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+      }
+    },
   },
 ]
 
 /** 该客户端应填入的 API 地址。 */
 export function endpointFor(preset: ClientPreset, origin: string): string {
   return preset.endpoint === 'root' ? origin : `${origin}/v1`
+}
+
+/** 生成该客户端可下载的配置；没有配置文件形态时返回 null。 */
+export function configFor(preset: ClientPreset, ctx: ClientContext): ClientConfigFile | null {
+  return preset.config ? preset.config(ctx) : null
 }
 
 /**

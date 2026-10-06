@@ -186,6 +186,70 @@ func (h *AdminHandler) ListLogs(c *gin.Context) {
 	response.Page(c, list, total, p.Page, p.PageSize)
 }
 
+// ExportAuditLogs 按当前筛选条件导出审计日志为 CSV（最多 10000 条）。
+//
+// 与调用日志导出保持同形：BOM 开头便于 Excel 正确识别 UTF-8，
+// 时间列用 RFC3339，便于后续按时间排序分析。
+func (h *AdminHandler) ExportAuditLogs(c *gin.Context) {
+	filter := service.AuditFilter{
+		Action:   c.Query("action"),
+		Start:    parseTime(c, "start"),
+		End:      parseTime(c, "end"),
+		Page:     1,
+		PageSize: maxExportRows,
+	}
+	if v, err := strconv.ParseUint(c.Query("user_id"), 10, 64); err == nil && v > 0 {
+		filter.UserID = uint(v)
+	}
+
+	list, _, err := h.svc.ListAuditLogs(c.Request.Context(), filter)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+
+	fileName := "audit-logs-" + time.Now().Format("20060102-150405") + ".csv"
+	c.Header("Content-Disposition", `attachment; filename="`+fileName+`"`)
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+
+	writer := csv.NewWriter(c.Writer)
+	// BOM 让 Excel 正确识别 UTF-8
+	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
+	_ = writer.Write([]string{
+		"时间", "用户ID", "用户名", "动作", "对象类型", "对象ID",
+		"状态", "明细", "IP", "UserAgent", "TraceID",
+	})
+	for i := range list {
+		e := &list[i]
+		_ = writer.Write([]string{
+			e.CreatedAt.Format(time.RFC3339),
+			strconv.FormatUint(uint64(e.UserID), 10),
+			e.Username,
+			e.Action,
+			e.TargetType,
+			e.TargetID,
+			auditStatusText(e.Status),
+			e.Detail,
+			e.IP,
+			e.UserAgent,
+			e.TraceID,
+		})
+	}
+	writer.Flush()
+}
+
+// auditStatusText 审计状态转文案，便于 CSV 直接阅读。
+func auditStatusText(status int) string {
+	switch status {
+	case model.AuditStatusSuccess:
+		return "成功"
+	case model.AuditStatusFailed:
+		return "失败"
+	default:
+		return "未知"
+	}
+}
+
 // ExportLogs 按当前筛选条件导出调用日志为 CSV（最多 10000 条）。
 func (h *AdminHandler) ExportLogs(c *gin.Context) {
 	p := ParsePage(c)
@@ -208,7 +272,7 @@ func (h *AdminHandler) ExportLogs(c *gin.Context) {
 	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
 	_ = writer.Write([]string{
 		"时间", "用户ID", "模型", "上游模型", "API协议", "请求协议", "渠道", "状态",
-		"提示Token", "完成Token", "推理Token", "合计Token", "点数",
+		"提示Token", "完成Token", "推理Token", "合计Token", "点数", "图片张数", "视频秒数",
 		"延迟(ms)", "首字(ms)", "工具轮次", "自用", "置信度", "HTTP状态", "错误信息", "TraceID", "客户端IP",
 	})
 	for i := range list {
@@ -227,6 +291,8 @@ func (h *AdminHandler) ExportLogs(c *gin.Context) {
 			strconv.Itoa(e.ReasoningTokens),
 			strconv.Itoa(e.TotalTokens),
 			strconv.FormatInt(e.Points, 10),
+			strconv.Itoa(e.ImageCount),
+			strconv.Itoa(e.VideoSeconds),
 			strconv.FormatInt(e.LatencyMS, 10),
 			strconv.FormatInt(e.FirstTokenMS, 10),
 			strconv.Itoa(e.ToolRounds),

@@ -209,9 +209,9 @@ Claude Code 网关（`/v1/models` + `Bearer`）→ Codex → Gemini 原生（`?k
 
 | 环节 | 设计 |
 | --- | --- |
-| 倍率表 | `model_ratios`：单位「点 / 1K tokens」，1 点 = 0.001 元，`*` 为兜底倍率 |
-| 预扣 | `ReserveQuota`：Redis Lua 脚本原子预扣，先占额度再发请求，防并发穿透 |
-| 结算 | `Settle`：按真实 usage 多退少补；请求失败**全额回补** |
+| 倍率表 | `model_ratios`：token 单位「点 / 1K tokens」，生图单位「点 / 张」，1 点 = 0.001 元，`*` 为兜底倍率 |
+| 预扣 | `ReserveQuota`：Redis Lua 脚本原子预扣，先占额度再发请求，防并发穿透。生图按**请求张数**预扣，token 调用按估算用量预扣 |
+| 结算 | `Settle`：按真实 usage 多退少补；请求失败**全额回补**。生图按**实际出图张数**结算 |
 | 余额不足 | 直接拒绝，业务码 `40201` |
 | 用量置信度 | `usage_confidence`：`reported`（上游上报）/ `estimated`（按请求参数估算） |
 | 日志落库 | `call_logs` 异步批量写入：模型、渠道、耗时、首字延迟、token、点数、IP、协议 |
@@ -333,7 +333,7 @@ CREATE UNIQUE INDEX idx_key_groups_name_active ON key_groups (name) WHERE delete
 
 | 数据源 | 内容 | 用途 |
 | --- | --- | --- |
-| `call_logs` | 每次转发：模型、渠道、状态、token、点数、耗时、首字延迟、IP、协议、参数应用明细 | 排障、对账、用户自查 |
+| `call_logs` | 每次转发：模型、渠道、状态、token、点数、图片张数、耗时、首字延迟、IP、协议、参数应用明细 | 排障、对账、用户自查 |
 | `audit_logs` | 管理动作留痕 | 安全审计 |
 | 日志导出 | `GET /api/v1/admin/logs/export` 导出 CSV（含协议与客户端 IP 列） | 离线分析 |
 | 健康检查 | `/healthz`（存活）、`/readyz`（依赖就绪） | 容器编排探针 |
@@ -399,10 +399,34 @@ ImageResponse { created, model, images[], usage }
 - **词库**：`prompt_templates` 按 10 个分类维护精选模板，迁移内置种子数据，支持分类筛选与关键词检索。
 - **可选模型**：由启用渠道的暴露模型汇总，口径是「模型目录声明 image 能力」或「模型名命中生图关键词」，
   并排除不支持生图的渠道协议。
-- **计费**：图片生成没有 token 维度口径（`spec.Usage` 与 `call_logs` 均无「张数」字段），
-  本次只落调用日志不做预扣结算；按张计费待后续补充。
+- **计费**：图片生成没有 token 维度口径，因此以**张数**计量：
+  `model_ratios.image_ratio` 为单价（点 / 张，`*` 与 `gateway.default_image_ratio` 兜底），
+  `call_logs.image_count` 记录实际出图张数。
+  与 chat 转发同走「预扣 → 多退少补」：按请求张数 `ReserveQuota` 预扣，
+  成功按实际张数 `Settle` 结算，失败全额回补；余额不足在请求发出前即被拒绝（`40201`）。
+  工作台与 `/v1/images/generations` 共用 `service.GenerateImage` 内的一份口径。
 
-### 3.13 接入引导与参数调试
+### 3.13 视频工作台（脚本创作 + 视频生成）
+
+视频比图片多两个难点：**异步**（提交只是排队）与**上游形态不统一**。设计取舍如下：
+
+- **异步任务**：`POST /videos` 提交拿到任务 ID → `GET /videos/{id}` 轮询状态 →
+  `GET /videos/{id}/content` 取内容。提交接口只返回「已排队」，后台协程推进到终态，
+  前端轮询作品列表看进度；超过 `studio.video_max_wait` 仍未终态的任务在查询时统一标记失败，
+  避免进程重启后留下永远转圈的条目。
+- **状态归一**：各家文案（`pending` / `in_progress` / `completed` / `failed` …）
+  归一到 `queued` / `processing` / `succeeded` / `failed` 四档；
+  `seconds` 可能是数字也可能是字符串（Sora 允许 `"8"`），统一转换。
+- **协议边界**：只认 OpenAI 兼容的 `/v1/videos`。Gemini 的 Veo 走 `predictLongRunning`
+  这套独立接口，Anthropic 不提供视频生成，明确报错胜过让上游返回 404。
+- **脚本创作**：由对话模型产出结构化 JSON 分镜（画面 / 旁白 / 运镜 / 时长 / 英文画面提示词），
+  超出目标总时长时按各镜头时长等比收敛；模型输出常带 ` ```json ` 代码块或前后缀，
+  解析前先裁掉。脚本**按 token 计费**，与 chat 转发同源。
+- **视频计费**：以**秒**计量（`model_ratios.video_ratio`，`gateway.default_video_ratio` 兜底）——
+  生成 10 秒与 4 秒成本差一倍，按条计会让长视频亏、短视频贵。
+  同样走「预扣 → 多退少补 → 失败回补」。
+
+### 3.14 接入引导与参数调试
 
 对接成本主要卡在两件事上：不知道「该填什么」，以及不知道「参数为什么没生效」。
 因此把接入信息集中成一个独立入口，并提供可预演的参数调试：
@@ -430,9 +454,9 @@ ImageResponse { created, model, images[], usage }
 | `users` | 用户 | username、password_hash、role、quota_points、must_change_password、status、group_id |
 | `api_keys` | 访问密钥 | user_id、name、key_hash、key_prefix、last_used_at、total_requests、total_tokens、status、group_id |
 | `channels` | 上游渠道 | name、base_url、api_key_encrypted、protocol、models、weight、status、param_schema、model_map、model_alias、request_override、last_error |
-| `model_ratios` | 模型倍率 | model、ratio（点 / 1K tokens），`*` 兜底 |
+| `model_ratios` | 模型倍率 | model、prompt_ratio / completion_ratio（点 / 1K tokens）、image_ratio（点 / 张），`*` 兜底 |
 | `model_catalog` | 模型目录 | 渠道探测得到的模型与能力缓存 |
-| `call_logs` | 调用日志 | user_id、key_id、channel_id、model、status、prompt/completion/reasoning tokens、points、latency_ms、ttft_ms、usage_confidence、client_ip、request_scheme |
+| `call_logs` | 调用日志 | user_id、key_id、channel_id、model、status、prompt/completion/reasoning tokens、points、image_count、latency_ms、ttft_ms、usage_confidence、client_ip、request_scheme |
 | `audit_logs` | 审计日志 | actor、action、target、ip、ua、trace_id |
 | `credentials` | OAuth 认证文件 | provider、payload_encrypted、quota、expires_at |
 | `identity_bindings` | 第三方绑定 | user_id、provider、external_id |
@@ -441,7 +465,7 @@ ImageResponse { created, model, images[], usage }
 | `mcp_servers` | MCP 服务 | name、transport、command/url、enabled、allow_exec |
 | `settings` | 系统设置 | key、value（自用模式、技能与 MCP 开关、最大工具轮次等） |
 | `prompt_templates` | 绘图提示词词库 | category、title、summary、prompt、tags、model_hint、aspect_ratio、sort、enabled |
-| `image_works` | 绘图作品 | user_id、channel_id、model、prompt、params、images、status、image_count、latency_ms、source |
+| `image_works` | 绘图作品 | user_id、api_key_id、channel_id、model、prompt、params、images、status、image_count、latency_ms、points、self_use、source |
 | **`groups`** | **分组（新增）** | name、rpm_limit、rpd_limit、concurrency、daily_token_cap、over_limit、status、is_builtin |
 | **`group_models`** | **分组模型配置（新增）** | group_id、model、enabled、ratio |
 
@@ -616,7 +640,7 @@ ReserveQuota(预估点数) ──► 上游调用 ──► Settle(真实点数)
 | --- | --- | --- |
 | 已交付 | 用户与密钥、协议适配（OpenAI/Gemini/Anthropic 互转）、渠道自动探测（含 Anthropic / Claude Code 原生协议）、别名与参数注入、计量计费、调用日志、MCP 与技能、Passkey / GitHub 绑定、TLS、**AI 绘图工作台（文生图 + 词库 + 作品库）** | — |
 | 本次设计 | **分组与分组级限流、分组级模型可用性与倍率覆盖** | P0 |
-| 下一步 | 图片按张计费、图生图（`/v1/images/edits` 与参考图上传）、词库后台维护、渠道级熔断指标看板、按用户维度的图表下钻、告警通知（Webhook / 企业微信） | P1 |
+| 下一步 | 图生图（`/v1/images/edits` 与参考图上传）、对外 `/v1/videos` 入口、词库后台维护、渠道级熔断指标看板、按用户维度的图表下钻、告警通知（Webhook / 企业微信） | P1 |
 | 中期 | 提示词内容安全钩子、请求重放与灰度分流、模型成本估算与预算告警 | P2 |
 | 长期 | 多实例横向扩展与就近调度、插件化 adapter 市场、企业级 SSO（OIDC / SAML） | P3 |
 

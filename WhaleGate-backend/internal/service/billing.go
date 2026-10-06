@@ -293,6 +293,95 @@ func (c *Container) PointsFor(
 	return int64(math.Ceil(points)), nil
 }
 
+// ImageRatioFor 返回模型的生图单价（点 / 张）。
+//
+// 取值顺序与 RatioFor 保持一致：逐模型 -> 通配符 "*" 兜底 -> 配置默认值。
+// 单价为 0 视为"未单独配置"而非"免费"：管理端从兜底价开始编辑，
+// 无法区分"管理员填入 0"与"从未配置"，统一按未配置处理；
+// 要全局免费应把 gateway.default_image_ratio 配成 0。
+func (c *Container) ImageRatioFor(ctx context.Context, modelName string) (float64, error) {
+	table, err := c.ratioTable(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if r, ok := table[modelName]; ok && r.ImageRatio > 0 {
+		return r.ImageRatio, nil
+	}
+	if r, ok := table[ratioWildcard]; ok && r.ImageRatio > 0 {
+		return r.ImageRatio, nil
+	}
+	return c.Config.Gateway.DefaultImageRatio, nil
+}
+
+// VideoRatioFor 返回模型的视频单价（点 / 秒），取值顺序与 ImageRatioFor 一致。
+func (c *Container) VideoRatioFor(ctx context.Context, modelName string) (float64, error) {
+	table, err := c.ratioTable(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if r, ok := table[modelName]; ok && r.VideoRatio > 0 {
+		return r.VideoRatio, nil
+	}
+	if r, ok := table[ratioWildcard]; ok && r.VideoRatio > 0 {
+		return r.VideoRatio, nil
+	}
+	return c.Config.Gateway.DefaultVideoRatio, nil
+}
+
+// PointsForVideo 计算视频生成的点数：单价（点 / 秒）× 秒数。
+//
+// 视频各家计价差异大（有的按条、有的按秒），本网关统一按秒——
+// 生成 10 秒和 4 秒的成本差一倍，按条计费会让长视频亏、短视频贵。
+func (c *Container) PointsForVideo(
+	ctx context.Context,
+	modelName string,
+	seconds int,
+	groupMultiplier float64,
+) (int64, error) {
+	if seconds <= 0 {
+		return 0, nil
+	}
+	unit, err := c.VideoRatioFor(ctx, modelName)
+	if err != nil {
+		return 0, err
+	}
+	if unit <= 0 {
+		return 0, nil
+	}
+	points := unit * float64(seconds)
+	if groupMultiplier > 0 && groupMultiplier != 1 {
+		points *= groupMultiplier
+	}
+	return int64(math.Ceil(points)), nil
+}
+
+// PointsForImage 计算生图调用的点数：单价（点 / 张）× 张数。
+//
+// sampleGroupMultiplier 与 token 计费口径一致：分组倍率系数在单价算出的点数上相乘，
+// 二者正交；未分组时传 1，行为与加分组功能之前完全一致。
+func (c *Container) PointsForImage(
+	ctx context.Context,
+	modelName string,
+	count int,
+	groupMultiplier float64,
+) (int64, error) {
+	if count <= 0 {
+		return 0, nil
+	}
+	unit, err := c.ImageRatioFor(ctx, modelName)
+	if err != nil {
+		return 0, err
+	}
+	if unit <= 0 {
+		return 0, nil
+	}
+	points := unit * float64(count)
+	if groupMultiplier > 0 && groupMultiplier != 1 {
+		points *= groupMultiplier
+	}
+	return int64(math.Ceil(points)), nil
+}
+
 // ratioTable 读取倍率表（进程内缓存 60 秒）。
 func (c *Container) ratioTable(ctx context.Context) (map[string]model.ModelRatio, error) {
 	if c.KeyCache != nil {
@@ -334,6 +423,12 @@ func (c *Container) UpsertRatio(ctx context.Context, r *model.ModelRatio) (*mode
 	if r.PromptRatio < 0 || r.CompletionRatio < 0 {
 		return nil, apierr.New(apierr.ErrInvalidParam, "倍率不能为负数")
 	}
+	if r.ImageRatio < 0 {
+		return nil, apierr.New(apierr.ErrInvalidParam, "生图单价不能为负数")
+	}
+	if r.VideoRatio < 0 {
+		return nil, apierr.New(apierr.ErrInvalidParam, "视频单价不能为负数")
+	}
 
 	var existing model.ModelRatio
 	err := c.DB.WithContext(ctx).Where("model = ?", r.Model).First(&existing).Error
@@ -342,12 +437,16 @@ func (c *Container) UpsertRatio(ctx context.Context, r *model.ModelRatio) (*mode
 		if err := c.DB.WithContext(ctx).Model(&existing).Updates(map[string]interface{}{
 			"prompt_ratio":     r.PromptRatio,
 			"completion_ratio": r.CompletionRatio,
+			"image_ratio":      r.ImageRatio,
+			"video_ratio":      r.VideoRatio,
 			"enabled":          r.Enabled,
 		}).Error; err != nil {
 			return nil, apierr.Wrap(apierr.ErrDatabase, err)
 		}
 		existing.PromptRatio = r.PromptRatio
 		existing.CompletionRatio = r.CompletionRatio
+		existing.ImageRatio = r.ImageRatio
+		existing.VideoRatio = r.VideoRatio
 		existing.Enabled = r.Enabled
 		c.invalidateRatioCache()
 		return &existing, nil
@@ -384,6 +483,12 @@ type RatioOverviewItem struct {
 	CompletionRatio float64 `json:"completion_ratio"`
 	// Custom 是否已单独配置；false 表示继承兜底倍率。
 	Custom bool `json:"custom"`
+	// ImageRatio / ImageCustom 生图单价（点 / 张）与其是否已单独配置，含义同 token 倍率。
+	ImageRatio  float64 `json:"image_ratio"`
+	ImageCustom bool    `json:"image_custom"`
+	// VideoRatio / VideoCustom 视频单价（点 / 秒）与其是否已单独配置。
+	VideoRatio  float64 `json:"video_ratio"`
+	VideoCustom bool    `json:"video_custom"`
 	// ID 单独配置的主键；继承项为 0，前端据此判断能否移除。
 	ID uint `json:"id"`
 	// Enabled 仅对单独配置项有意义：停用后该模型回到兜底计费。
@@ -419,6 +524,16 @@ func (c *Container) RatioOverview(ctx context.Context) ([]RatioOverviewItem, err
 	if star, ok := byModel[ratioWildcard]; ok && star.Enabled {
 		fallbackPrompt, fallbackCompletion = star.PromptRatio, star.CompletionRatio
 	}
+	// 生图兜底单价：已启用的 * 行优先，否则回落到配置默认值（口径同 ImageRatioFor）。
+	fallbackImage := c.Config.Gateway.DefaultImageRatio
+	if star, ok := byModel[ratioWildcard]; ok && star.Enabled && star.ImageRatio > 0 {
+		fallbackImage = star.ImageRatio
+	}
+	// 视频兜底单价，口径同 VideoRatioFor。
+	fallbackVideo := c.Config.Gateway.DefaultVideoRatio
+	if star, ok := byModel[ratioWildcard]; ok && star.Enabled && star.VideoRatio > 0 {
+		fallbackVideo = star.VideoRatio
+	}
 
 	channels, err := c.EnabledChannels(ctx)
 	if err != nil {
@@ -436,6 +551,8 @@ func (c *Container) RatioOverview(ctx context.Context) ([]RatioOverviewItem, err
 			Model:           name,
 			PromptRatio:     fallbackPrompt,
 			CompletionRatio: fallbackCompletion,
+			ImageRatio:      fallbackImage,
+			VideoRatio:      fallbackVideo,
 			// 无渠道归属（如兜底项）时给出空数组，避免前端拿到 null
 			Channels: append([]string{}, channelOf[name]...),
 		}
@@ -445,6 +562,15 @@ func (c *Container) RatioOverview(ctx context.Context) ([]RatioOverviewItem, err
 			item.Custom = true
 			item.PromptRatio = r.PromptRatio
 			item.CompletionRatio = r.CompletionRatio
+			// 单价为 0 表示未单独配置（见 ImageRatioFor），此时继续回显兜底价。
+			if r.ImageRatio > 0 {
+				item.ImageRatio = r.ImageRatio
+				item.ImageCustom = true
+			}
+			if r.VideoRatio > 0 {
+				item.VideoRatio = r.VideoRatio
+				item.VideoCustom = true
+			}
 		}
 		return item
 	}

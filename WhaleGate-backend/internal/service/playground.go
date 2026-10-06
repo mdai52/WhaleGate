@@ -151,12 +151,13 @@ func (c *Container) PreviewParams(ctx context.Context, in ParamPreviewInput) (*P
 		return nil, apierr.Wrap(apierr.ErrInvalidParam, err)
 	}
 
-	report := gateway.ApplyParams(payload, channel.Type, gateway.CollectParams(unified), channel.Schema())
+	schema := channel.Schema()
+	passthrough := gateway.ResolvePassthrough(schema, c.ParamPassthrough())
+	report := gateway.ApplyParams(payload, channel.Type, gateway.CollectParams(unified), schema, passthrough)
 	if len(override) > 0 {
 		payload = util.MergeMap(payload, override)
 	}
 
-	schema := channel.Schema()
 	out := &ParamPreview{
 		Model:         in.Model,
 		UpstreamModel: upstreamModel,

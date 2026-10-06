@@ -53,6 +53,10 @@ type ImageWork struct {
 	ImageCount int `gorm:"not null;default:0" json:"image_count"`
 	// LatencyMS 端到端耗时。
 	LatencyMS int `gorm:"not null;default:0" json:"latency_ms"`
+	// Points 本次生成实际扣除的点数；自用模式下记录应扣点数，但用户余额不扣减。
+	Points int64 `gorm:"not null;default:0" json:"points"`
+	// SelfUse 该次生成发生在自用模式下（免费）。
+	SelfUse bool `gorm:"not null;default:false" json:"self_use"`
 	// Source 来源：studio（工作台）或 api（/v1 接口）。
 	Source    string    `gorm:"size:16;not null;default:'studio'" json:"source"`
 	CreatedAt time.Time `json:"created_at"`

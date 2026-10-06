@@ -15,8 +15,11 @@ const apiKey = ref('sk-你的密钥')
 const model = ref('gpt-4o')
 
 const origin = computed(() => window.location.origin)
-const baseURL = computed(() => `${origin.value}/v1`)
-const geminiBase = computed(() => `${origin.value}/v1beta`)
+// 出口双轨：/api/v1 为统一出口（与 /api Anthropic base 配套），/v1 为兼容旧接入保留
+const baseURL = computed(() => `${origin.value}/api/v1`)
+const legacyBase = computed(() => `${origin.value}/v1`)
+const anthropicBase = computed(() => origin.value)
+const geminiBase = computed(() => `${origin.value}/api/v1beta`)
 
 async function copy(text: string, tip = '已复制到剪贴板') {
   try {
@@ -172,6 +175,16 @@ curl ${baseURL.value}/chat/completions \\
               <a-button type="link" size="small" @click="copy(baseURL)">
                 <CopyOutlined />
               </a-button>
+              <div class="wg-hint">
+                旧地址 <code>{{ legacyBase }}</code> 同样可用（双轨兼容，无需改动存量接入）。
+              </div>
+            </a-descriptions-item>
+            <a-descriptions-item label="Anthropic SDK 地址（anthropic_base_url）">
+              <code>{{ anthropicBase }}</code>
+              <a-button type="link" size="small" @click="copy(anthropicBase)">
+                <CopyOutlined />
+              </a-button>
+              <div class="wg-hint">SDK 会自动追加 <code>/v1/messages</code>。</div>
             </a-descriptions-item>
             <a-descriptions-item label="Gemini 原生地址">
               <code>{{ geminiBase }}</code>
@@ -215,7 +228,7 @@ curl ${baseURL.value}/chat/completions \\
             show-icon
             style="margin-bottom: 16px"
             message="自定义参数会自动识别并按上游能力分配"
-            description="不同上游支持的参数并不一致。网关会统一参数名、按渠道声明的能力判断是否支持，再把值写入上游对应字段；不支持的会被静默丢弃，避免上游直接报错。"
+            description="不同上游支持的参数并不一致。网关会统一参数名、按协议映射到上游对应字段，能力表之外的参数默认原样透传，由上游决定是否接受；只有管理员显式排除的参数才会被拦下。"
           />
 
           <h3>网关的处理流程</h3>
@@ -292,9 +305,11 @@ curl ${baseURL.value}/chat/completions \\
               可直接把地址指向本网关的 <code>/v1/messages</code>。具体填法见「客户端接入」。
             </a-collapse-panel>
             <a-collapse-panel key="2" header="传了参数但上游没生效？">
-              先看响应头 <code>X-WG-Params-Dropped</code>。被丢弃通常是两个原因：该渠道未声明支持这个参数，
-              或当前协议没有对应字段（例如给 OpenAI 渠道传 <code>top_k</code>）。可在「参数调试」里确认，
-              或在「渠道管理 → 参数能力声明」中调整。
+              网关默认<b>透传</b>自定义参数：能力表之外的参数会原样发给上游，由上游决定是否接受，
+              不支持时上游的报错会原样返回给你。只有管理员在「渠道管理 → 参数能力声明」里显式
+              <code>exclude</code> 的参数才会被网关拦下（响应头 <code>X-WG-Params-Dropped</code> 可见）。
+              想恢复"先过滤再转发"的旧行为，可在渠道的参数能力声明里加
+              <code>{"passthrough": false}</code>，或把 <code>gateway.param_passthrough</code> 配成 false。
             </a-collapse-panel>
             <a-collapse-panel key="3" header="如何查看可用模型？">
               调用 <code>GET {{ baseURL }}/models</code>；该列表汇总了所有启用渠道暴露的模型与别名。
@@ -347,6 +362,12 @@ curl ${baseURL.value}/chat/completions \\
   margin: 8px 0;
   padding-left: 20px;
   line-height: 2;
+}
+
+.wg-hint {
+  margin-top: 2px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
 }
 
 code {

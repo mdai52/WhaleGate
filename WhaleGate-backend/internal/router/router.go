@@ -88,6 +88,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 	credentialHandler := handler.NewCredentialHandler(d.Svc)
 	account := handler.NewAccountHandler(d.Svc)
 	studio := handler.NewStudioHandler(d.Svc)
+	videoStudio := handler.NewVideoStudioHandler(d.Svc)
 	playground := handler.NewPlaygroundHandler(d.Svc)
 	group := handler.NewGroupHandler(d.Svc)
 
@@ -138,6 +139,8 @@ func registerAPI(e *gin.Engine, d Deps) {
 		accountGroup := authed.Group("/account")
 		{
 			accountGroup.GET("/bindings", account.Bindings)
+			// 账号自助安全事件：本人最近登录、改密、绑定等审计留痕
+			accountGroup.GET("/security-events", account.SecurityEvents)
 			accountGroup.DELETE("/bindings/identity/:id", account.UnbindIdentity)
 			accountGroup.DELETE("/bindings/passkey/:id", account.DeletePasskey)
 			accountGroup.POST("/passkey/register/begin", account.PasskeyRegisterBegin)
@@ -155,6 +158,21 @@ func registerAPI(e *gin.Engine, d Deps) {
 			studioGroup.GET("/works", studio.Works)
 			studioGroup.DELETE("/works/:id", studio.DeleteWork)
 			studioGroup.GET("/works/:id/images/:index", studio.WorkImage)
+		}
+
+		// 视频工作台：脚本创作、视频生成（异步任务）与作品库
+		videoGroup := authed.Group("/studio/video")
+		{
+			videoGroup.GET("/models", videoStudio.Models)
+			videoGroup.GET("/prompts", videoStudio.PromptLibrary)
+			videoGroup.POST("/scripts", videoStudio.CreateScript)
+			videoGroup.GET("/scripts", videoStudio.Scripts)
+			videoGroup.DELETE("/scripts/:id", videoStudio.DeleteScript)
+			videoGroup.POST("/works", videoStudio.Generate)
+			videoGroup.GET("/works", videoStudio.Works)
+			videoGroup.GET("/works/:id", videoStudio.Work)
+			videoGroup.DELETE("/works/:id", videoStudio.DeleteWork)
+			videoGroup.GET("/works/:id/videos/:index", videoStudio.WorkVideo)
 		}
 
 		// 参数调试：预览自定义参数会被如何分配（不发起上游请求、不计费）
@@ -197,6 +215,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 				skills.GET("", skill.List)
 				skills.POST("/scan", skill.Scan)
 				skills.PATCH("/:id/toggle", skill.Toggle)
+				skills.PATCH("/:id/mode", skill.SetMode)
 				skills.DELETE("/:id", skill.Delete)
 			}
 
@@ -208,6 +227,8 @@ func registerAPI(e *gin.Engine, d Deps) {
 				mcpGroup.PUT("/:id", mcpHandler.Update)
 				mcpGroup.DELETE("/:id", mcpHandler.Delete)
 				mcpGroup.POST("/:id/connect", mcpHandler.Connect)
+				mcpGroup.POST("/:id/test", mcpHandler.Test)
+				mcpGroup.PATCH("/:id/toggle", mcpHandler.Toggle)
 				mcpGroup.GET("/tools", mcpHandler.Tools)
 				mcpGroup.POST("/tools/call", mcpHandler.Call)
 			}
@@ -232,6 +253,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 		adminGroup.GET("/logs", admin.ListLogs)
 		adminGroup.GET("/logs/export", admin.ExportLogs)
 		adminGroup.GET("/audit-logs", admin.ListAuditLogs)
+		adminGroup.GET("/audit-logs/export", admin.ExportAuditLogs)
 
 		oauthGroup := adminGroup.Group("/oauth")
 		{
@@ -254,26 +276,42 @@ func registerAPI(e *gin.Engine, d Deps) {
 	}
 }
 
-// registerGateway 注册 OpenAI 兼容入口与 Gemini 原生入口。
+// registerGateway 注册对外网关入口。
+//
+// 出口统一挂 /api/v1（与各管理端接口同前缀但路径不冲突），
+// 同时保留 /v1 双轨兼容——老接入方无需改 base_url。
+// Anthropic SDK 的习惯是 base_url 填站点根 + SDK 追加 /v1/messages，
+// 因此 /api 与 / 都能作为 Anthropic base_url 使用。
 func registerGateway(e *gin.Engine, d Deps) {
 	relay := handler.NewRelayHandler(d.Svc)
 	image := handler.NewImageHandler(d.Svc)
+	embeddings := handler.NewEmbeddingsHandler(d.Svc)
+	videoAPI := handler.NewVideoAPIHandler(d.Svc)
 
-	openaiGroup := e.Group("/v1")
-	openaiGroup.Use(middleware.APIKeyAuth(d.Svc), middleware.RateLimit(d.Svc))
-	{
-		openaiGroup.GET("/models", relay.ListModels)
-		openaiGroup.POST("/chat/completions", relay.ChatCompletions)
-		openaiGroup.POST("/images/generations", image.Generations)
-		// Anthropic Messages API 入站：Claude Code / CCSwitch 等客户端接入用
-		openaiGroup.POST("/messages", relay.Messages)
+	// OpenAI 兼容 + Anthropic Messages：/v1 与 /api/v1 双轨同 handler
+	for _, base := range []string{"/v1", "/api/v1"} {
+		g := e.Group(base)
+		g.Use(middleware.APIKeyAuth(d.Svc), middleware.RateLimit(d.Svc))
+		{
+			g.GET("/models", relay.ListModels)
+			g.POST("/chat/completions", relay.ChatCompletions)
+			g.POST("/messages", relay.Messages)
+			g.POST("/images/generations", image.Generations)
+			g.POST("/embeddings", embeddings.Embeddings)
+			g.POST("/videos", videoAPI.Create)
+			g.GET("/videos/:id", videoAPI.Show)
+			g.GET("/videos/:id/content", videoAPI.Content)
+		}
 	}
 
-	// Gemini 原生：/v1beta/models/{model}:generateContent 与 :streamGenerateContent
-	geminiGroup := e.Group("", middleware.APIKeyAuth(d.Svc), middleware.RateLimit(d.Svc))
-	{
-		geminiGroup.POST("/v1beta/models/*fullpath", relay.GeminiNative)
-		geminiGroup.POST("/gemini/v1beta/models/*fullpath", relay.GeminiNative)
+	// Gemini 原生：{model}:generateContent 与 :streamGenerateContent，
+	// /v1beta 与 /api/v1beta 双轨（/api 前缀与统一出口保持一致）。
+	for _, pattern := range []string{
+		"/v1beta/models/*fullpath",
+		"/gemini/v1beta/models/*fullpath",
+		"/api/v1beta/models/*fullpath",
+	} {
+		e.POST(pattern, middleware.APIKeyAuth(d.Svc), middleware.RateLimit(d.Svc), relay.GeminiNative)
 	}
 }
 

@@ -106,6 +106,8 @@ gateway:
   # 倍率兜底（点 / 1K tokens，1 点 = 0.001 元），未命中模型倍率表时使用
   default_prompt_ratio: 15
   default_completion_ratio: 60
+  # 生图兜底单价（点 / 张），模型倍率表里未单独配置时按其计费；置 0 表示免费
+  default_image_ratio: 200
   # 上游未返回 usage 时，按该值估算输出 token 数
   estimate_completion_tokens: 1024
   # 额度增量落库周期

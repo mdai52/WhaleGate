@@ -1,13 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ApiOutlined, DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
+import {
+  ApiOutlined,
+  DeleteOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { mcpApi } from '@/api/mcp'
 import { parseJSON } from '@/utils/json'
 import type { ExposedTool, MCPServer } from '@/api/types'
 
 const loading = ref(false)
-const connecting = ref(false)
+/** 按服务 ID 记录"连接中/测试中"，避免一个全局开关让所有行同时转圈 */
+const connectingIds = ref<Set<number>>(new Set())
+const testingIds = ref<Set<number>>(new Set())
 const servers = ref<MCPServer[]>([])
 const tools = ref<ExposedTool[]>([])
 
@@ -22,6 +30,7 @@ const form = reactive({
   args: '',
   env: '',
   url: '',
+  headers: '',
   auto_execute: false,
   enabled: true,
 })
@@ -62,6 +71,7 @@ function openCreate() {
     args: '',
     env: '',
     url: '',
+    headers: '',
     auto_execute: false,
     enabled: true,
   })
@@ -79,6 +89,10 @@ function openEdit(row: MCPServer) {
     args: args.join(' '),
     env: Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n'),
     url: row.url,
+    // 请求头与环境变量一样按行展示，便于手工核对
+    headers: Object.entries(parseJSON<Record<string, string>>(row.headers, {}).value)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join('\n'),
     auto_execute: row.auto_execute,
     enabled: row.enabled,
   })
@@ -105,6 +119,14 @@ function buildPayload() {
     payload.env = env
   } else {
     payload.url = form.url.trim()
+    const headers: Record<string, string> = {}
+    for (const line of form.headers.split('\n')) {
+      const idx = line.indexOf(':')
+      if (idx > 0) {
+        headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+      }
+    }
+    payload.headers = headers
   }
   return payload
 }
@@ -140,7 +162,8 @@ async function submit() {
 }
 
 async function connect(row: MCPServer) {
-  connecting.value = true
+  // 按行记录连接中状态：此前是全局 ref，点一行会让所有行一起转圈。
+  connectingIds.value.add(row.id)
   try {
     const res = await mcpApi.connect(row.id)
     message.success(`已连接，发现 ${res.tool_count} 个工具`)
@@ -149,8 +172,28 @@ async function connect(row: MCPServer) {
     message.error(error instanceof Error ? error.message : '连接失败')
     await load()
   } finally {
-    connecting.value = false
+    connectingIds.value.delete(row.id)
   }
+}
+
+/** 连通性测试：只连一次看结果，不写库、不改变启用状态 */
+async function testServer(row: MCPServer) {
+  testingIds.value.add(row.id)
+  try {
+    const res = await mcpApi.test(row.id)
+    message.success(`连通正常：${res.tool_count} 个工具，耗时 ${res.latency_ms} ms`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '连通性测试失败')
+  } finally {
+    testingIds.value.delete(row.id)
+  }
+}
+
+/** 启停服务：停用后不再参与工具发现与调用，配置保留 */
+async function toggleServer(row: MCPServer, checked: boolean) {
+  await mcpApi.toggle(row.id, checked)
+  message.success(checked ? `已启用「${row.name}」` : `已停用「${row.name}」，其工具不再注入`)
+  await load()
 }
 
 function removeServer(row: MCPServer) {
@@ -212,6 +255,10 @@ onMounted(load)
           </div>
         </div>
         <a-space>
+          <a-button :loading="loading" @click="load">
+            <ReloadOutlined />
+            刷新
+          </a-button>
           <a-button @click="openCall">调试调用</a-button>
           <a-button type="primary" @click="openCreate">
             <PlusOutlined />
@@ -243,6 +290,9 @@ onMounted(load)
         :scroll="{ x: 720 }"
         :pagination="false"
       >
+        <template #emptyText>
+          <a-empty description="还没有 MCP 服务，点「新增服务」接入第一个" />
+        </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'transport'">
             <a-tag>{{ (record as MCPServer).transport }}</a-tag>
@@ -251,9 +301,19 @@ onMounted(load)
             </span>
           </template>
           <template v-else-if="column.key === 'status'">
-            <a-tag :color="statusMeta[(record as MCPServer).status]?.color">
-              {{ statusMeta[(record as MCPServer).status]?.text ?? (record as MCPServer).status }}
-            </a-tag>
+            <a-space :size="4">
+              <a-tag :color="statusMeta[(record as MCPServer).status]?.color">
+                {{ statusMeta[(record as MCPServer).status]?.text ?? (record as MCPServer).status }}
+              </a-tag>
+              <!-- 停用后工具不再注入，配置保留，随时可再启用 -->
+              <a-switch
+                size="small"
+                :checked="(record as MCPServer).enabled"
+                checked-children="启用"
+                un-checked-children="停用"
+                @change="(checked: boolean) => toggleServer(record as MCPServer, checked)"
+              />
+            </a-space>
             <div v-if="(record as MCPServer).last_error" class="wg-muted">
               {{ (record as MCPServer).last_error.slice(0, 60) }}
             </div>
@@ -267,9 +327,20 @@ onMounted(load)
           </template>
           <template v-else-if="column.key === 'action'">
             <a-space>
-              <a-button size="small" :loading="connecting" @click="connect(record as MCPServer)">
+              <a-button
+                size="small"
+                :loading="connectingIds.has((record as MCPServer).id)"
+                @click="connect(record as MCPServer)"
+              >
                 <ThunderboltOutlined />
                 连接
+              </a-button>
+              <a-button
+                size="small"
+                :loading="testingIds.has((record as MCPServer).id)"
+                @click="testServer(record as MCPServer)"
+              >
+                测试
               </a-button>
               <a-button size="small" @click="openEdit(record as MCPServer)">编辑</a-button>
               <a-button danger size="small" type="text" @click="removeServer(record as MCPServer)">
@@ -333,7 +404,20 @@ onMounted(load)
           <a-form-item label="服务地址" required>
             <a-input v-model:value="form.url" placeholder="https://mcp.example.com/mcp" allow-clear />
           </a-form-item>
+          <!-- 后端支持自定义请求头，常用于带鉴权令牌的远程 MCP 服务 -->
+          <a-form-item label="请求头">
+            <a-textarea
+              v-model:value="form.headers"
+              :rows="2"
+              placeholder="每行一个，格式 Key: Value，例如 Authorization: Bearer xxx"
+            />
+          </a-form-item>
         </template>
+
+        <a-form-item label="启用">
+          <a-switch v-model:checked="form.enabled" checked-children="启用" un-checked-children="停用" />
+          <div class="wg-muted">停用后该服务的工具不再注入，配置保留</div>
+        </a-form-item>
 
         <a-form-item>
           <template #label>

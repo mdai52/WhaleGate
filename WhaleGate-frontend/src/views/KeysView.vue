@@ -132,6 +132,7 @@ const columns = [
   { title: '最近使用', dataIndex: 'last_used_at', key: 'last_used_at' },
   { title: '累计请求', dataIndex: 'request_count', key: 'request_count' },
   { title: '累计 Token', dataIndex: 'total_tokens', key: 'total_tokens' },
+  { title: '累计点数', key: 'used_points', width: 130 },
   { title: '限制', key: 'limits', width: 160 },
   { title: '操作', key: 'action', fixed: 'right' as const },
 ]
@@ -141,6 +142,7 @@ const stats = computed(() => ({
   count: pagination.total,
   requests: items.value.reduce((acc, i) => acc + (i.request_count || 0), 0),
   tokens: items.value.reduce((acc, i) => acc + (i.total_tokens || 0), 0),
+  points: items.value.reduce((acc, i) => acc + (i.used_points || 0), 0),
 }))
 
 function formatNumber(n: number) {
@@ -393,22 +395,28 @@ onMounted(load)
       />
 
       <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
-        <a-col :xs="24" :sm="8">
+        <a-col :xs="24" :sm="12" :lg="6">
           <a-card size="small">
             <a-statistic title="密钥数量" :value="stats.count" :value-style="{ fontSize: '22px' }" />
             <div class="wg-stat-desc">当前账号持有的 API 密钥数量</div>
           </a-card>
         </a-col>
-        <a-col :xs="24" :sm="8">
+        <a-col :xs="24" :sm="12" :lg="6">
           <a-card size="small">
             <a-statistic title="累计请求" :value="stats.requests" :value-style="{ fontSize: '22px' }" />
             <div class="wg-stat-desc">全部密钥累计请求数（当前页合计）</div>
           </a-card>
         </a-col>
-        <a-col :xs="24" :sm="8">
+        <a-col :xs="24" :sm="12" :lg="6">
           <a-card size="small">
             <a-statistic title="累计 Token" :value="stats.tokens" :value-style="{ fontSize: '22px' }" />
             <div class="wg-stat-desc">全部密钥累计 Token 使用量（当前页合计）</div>
+          </a-card>
+        </a-col>
+        <a-col :xs="24" :sm="12" :lg="6">
+          <a-card size="small">
+            <a-statistic title="累计点数" :value="stats.points" :value-style="{ fontSize: '22px' }" />
+            <div class="wg-stat-desc">全部密钥累计消耗点数（1 点 = 0.001 元）</div>
           </a-card>
         </a-col>
       </a-row>
@@ -459,6 +467,13 @@ onMounted(load)
           </template>
           <template v-else-if="column.key === 'total_tokens'">
             {{ formatNumber((record as APIKeyItem).total_tokens || 0) }}
+          </template>
+          <template v-else-if="column.key === 'used_points'">
+            {{ formatNumber((record as APIKeyItem).used_points || 0) }}
+            <!-- 设了额度上限时把「已用/上限」一并给出，不用点开抽屉才能核对 -->
+            <div v-if="(record as APIKeyItem).quota_limit" class="wg-muted">
+              / {{ formatNumber((record as APIKeyItem).quota_limit || 0) }}
+            </div>
           </template>
           <template v-else-if="column.key === 'limits'">
             <a-space :size="[0, 4]" wrap>

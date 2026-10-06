@@ -193,6 +193,13 @@ load()
             <div class="wg-provider-main">
               <div class="wg-provider-name">{{ p.name }}</div>
               <div class="wg-provider-desc">{{ p.description || p.id }}</div>
+              <a-alert
+                v-if="p.setup_note"
+                type="warning"
+                show-icon
+                class="wg-setup-note"
+                :message="p.setup_note"
+              />
             </div>
             <a-button type="primary" @click="start(p)">开始授权登录</a-button>
           </div>
@@ -210,6 +217,13 @@ load()
             <div class="wg-provider-main">
               <div class="wg-provider-name">{{ p.name }}</div>
               <div class="wg-provider-desc">{{ p.description || p.id }}</div>
+              <a-alert
+                v-if="p.setup_note"
+                type="warning"
+                show-icon
+                class="wg-setup-note"
+                :message="p.setup_note"
+              />
             </div>
             <a-button type="primary" @click="start(p)">开始授权登录</a-button>
           </div>
@@ -311,6 +325,10 @@ load()
   border: 1px solid #f0f0f0;
   border-radius: 10px;
   transition: box-shadow 0.2s;
+}
+
+.wg-setup-note {
+  margin-top: 8px;
 }
 
 .wg-provider-card:hover {

@@ -88,6 +88,27 @@ func (s *S3) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	return s.client.GetObject(ctx, s.Bucket, s.objectKey(key), minio.GetObjectOptions{})
 }
 
+// Size 查询对象大小，供视频分段回读应答 HTTP Range。
+func (s *S3) Size(ctx context.Context, key string) (int64, error) {
+	info, err := s.client.StatObject(ctx, s.Bucket, s.objectKey(key), minio.StatObjectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return info.Size, nil
+}
+
+// OpenRange 只取对象的指定字节区间（对象存储支持服务端裁剪，不下载整段）。
+func (s *S3) OpenRange(ctx context.Context, key string, start, end int64) (io.ReadCloser, error) {
+	if start < 0 || end < start {
+		return nil, ErrInvalidKey
+	}
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetRange(start, end); err != nil {
+		return nil, err
+	}
+	return s.client.GetObject(ctx, s.Bucket, s.objectKey(key), opts)
+}
+
 // Delete 删除该前缀下的全部对象。
 func (s *S3) Delete(ctx context.Context, prefix string) error {
 	if strings.TrimSpace(prefix) == "" {

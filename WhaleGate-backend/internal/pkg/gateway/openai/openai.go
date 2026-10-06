@@ -48,8 +48,12 @@ type Message struct {
 	Name       string      `json:"name,omitempty"`
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	// Images OpenRouter 风格扩展：生图结果放在 message.images[]。
-	Images []ImagePart `json:"images,omitempty"`
+	// ReasoningContent 思维链正文：Qwen3 等思考模型把推理过程放这里、content 留空。
+	// 深度求索 / OpenRouter 等生态同样使用该扩展字段。
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// Reasoning vLLM 新版（>=0.27）使用的同义字段，与 reasoning_content 二选一出现。
+	Reasoning string      `json:"reasoning,omitempty"`
+	Images    []ImagePart `json:"images,omitempty"`
 }
 
 // ImagePart OpenRouter 风格的图片片段。
@@ -416,8 +420,20 @@ func toUnifiedMessage(m Message) spec.Message {
 		Name:       m.Name,
 		ToolCallID: m.ToolCallID,
 		ToolCalls:  convertToolCalls(m.ToolCalls),
+		Reasoning:  firstNonEmpty(m.ReasoningContent, m.Reasoning),
 		Images:     images,
 	}
+}
+
+// firstNonEmpty 返回第一个非空字符串；思考模型的思维链字段有两种命名，
+// 上游用哪个取决于其推理解析器版本。
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // convertImageParts 把 OpenRouter 扩展的 message.images[] 归一为统一图片结构。
@@ -500,6 +516,11 @@ func BuildResponse(u *spec.UnifiedResponse) map[string]interface{} {
 		msg := map[string]interface{}{"role": c.Message.Role, "content": c.Message.Content}
 		if c.Message.Name != "" {
 			msg["name"] = c.Message.Name
+		}
+		// 思维链透传：Qwen3 等思考模型的正文在 reasoning_content 里，
+		// content 可能为空，丢掉它客户端只能看到一条空回复。
+		if c.Message.Reasoning != "" {
+			msg["reasoning_content"] = c.Message.Reasoning
 		}
 		if len(c.Message.ToolCalls) > 0 {
 			calls := make([]map[string]interface{}, 0, len(c.Message.ToolCalls))
@@ -587,6 +608,7 @@ func ParseStreamEvent(payload []byte) (*spec.StreamChunk, error) {
 				Role:      c.Delta.Role,
 				Content:   contentToString(c.Delta.Content),
 				ToolCalls: convertToolCalls(c.Delta.ToolCalls),
+				Reasoning: firstNonEmpty(c.Delta.ReasoningContent, c.Delta.Reasoning),
 				Images:    convertImageParts(c.Delta.Images),
 			},
 			FinishReason: c.FinishReason,
@@ -612,6 +634,9 @@ func BuildStreamEvent(u *spec.StreamChunk) ([]byte, error) {
 		}
 		if c.Delta.Content != "" {
 			delta["content"] = c.Delta.Content
+		}
+		if c.Delta.Reasoning != "" {
+			delta["reasoning_content"] = c.Delta.Reasoning
 		}
 		if len(c.Delta.ToolCalls) > 0 {
 			calls := make([]map[string]interface{}, 0, len(c.Delta.ToolCalls))

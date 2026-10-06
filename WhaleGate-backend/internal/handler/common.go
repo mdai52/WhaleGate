@@ -61,6 +61,19 @@ func CurrentRole(c *gin.Context) string {
 // IsAdmin 当前请求是否为管理员。
 func IsAdmin(c *gin.Context) bool { return CurrentRole(c) == constant.RoleAdmin }
 
+// groupMultiplier 取当前密钥所属分组的倍率系数；未分组或分组不可用时为 1。
+//
+// 按请求解析而不是折进 KeyIdentity：密钥缓存最长 24 小时，
+// 折进去会让管理员调整分组倍率后长时间不生效。
+// 转发（chat）与生图两条链路共用该口径，避免生图绕开分组加价。
+func groupMultiplier(svc *service.Container, c *gin.Context) float64 {
+	idn := currentKeyIdentity(c)
+	if idn == nil {
+		return 1
+	}
+	return svc.GroupPolicyFor(c.Request.Context(), idn.GroupTag).RatioMultiplier
+}
+
 // CurrentUsername 返回当前登录用户名。
 func CurrentUsername(c *gin.Context) string {
 	v, _ := c.Get(constant.CtxUsername)

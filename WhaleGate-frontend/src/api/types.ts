@@ -283,6 +283,10 @@ export interface ModelRatio {
   prompt_ratio: number
   /** 点 / 1K completion tokens（含思维链） */
   completion_ratio: number
+  /** 生图单价：点 / 张；0 表示未单独配置，继承兜底单价 */
+  image_ratio: number
+  /** 视频单价：点 / 秒；0 表示未单独配置，继承兜底单价 */
+  video_ratio: number
   enabled: boolean
   created_at: string
   updated_at: string
@@ -298,6 +302,14 @@ export interface RatioOverviewItem {
   model: string
   prompt_ratio: number
   completion_ratio: number
+  /** 生图单价：点 / 张，继承项为兜底单价 */
+  image_ratio: number
+  /** 生图单价是否已单独配置 */
+  image_custom: boolean
+  /** 视频单价：点 / 秒，继承项为兜底单价 */
+  video_ratio: number
+  /** 视频单价是否已单独配置 */
+  video_custom: boolean
   custom: boolean
   /** 单独配置的主键；继承项为 0 */
   id: number
@@ -325,6 +337,10 @@ export interface CallLog {
   reasoning_tokens: number
   total_tokens: number
   points: number
+  /** 生图调用生成的张数；非生图调用为 0 */
+  image_count: number
+  /** 视频调用生成的秒数；非视频调用为 0 */
+  video_seconds: number
   latency_ms: number
   first_token_ms: number
   status: CallStatus
@@ -357,6 +373,8 @@ export interface OAuthProvider {
   description?: string
   flow: OAuthFlow
   scopes?: string[]
+  /** 内置公开客户端无法直接授权时给出的配置提示（如 Gemini 需自建 Google 客户端） */
+  setup_note?: string
 }
 
 export interface OAuthStart {
@@ -421,12 +439,41 @@ export interface PasskeyConfig {
   rp_origins: string[]
 }
 
+/** 安全审计日志 */
+export interface AuditLog {
+  id: number
+  user_id: number
+  username?: string
+  action: string
+  target_type?: string
+  target_id?: string
+  /** 1 成功 / 2 失败 */
+  status: number
+  detail?: string
+  ip?: string
+  user_agent?: string
+  trace_id?: string
+  created_at: string
+}
+
 export interface BindingsResult {
   identities: UserIdentity[]
   passkeys: WebAuthnCredential[]
   github_enabled: boolean
   passkey_enabled: boolean
   passkey_config: PasskeyConfig
+}
+
+/** 账号自助安全事件：本人最近的登录、改密、绑定等审计留痕 */
+export interface SecurityEvent {
+  id: number
+  action: string
+  target_type?: string
+  target_id?: string
+  status: number
+  detail?: string
+  ip?: string
+  created_at: string
 }
 
 // ---------------------------------------------------------------- 绘图工作台
@@ -483,8 +530,89 @@ export interface ImageWork {
   latency_ms: number
   source: string
   channel_id: number
+  /** 本次生成扣除的点数 */
+  points: number
+  /** 是否发生在自用模式下（免费） */
+  self_use: boolean
   error_message?: string
   created_at: string
+}
+
+// ---------------------------------------------------------------- 视频工作台
+
+/** 可选的生成模型：video 视频生成 / text 脚本创作 */
+export interface VideoModel {
+  model: string
+  channel: string
+  kind: 'video' | 'text'
+}
+
+/** 分镜脚本中的一个镜头 */
+export interface VideoScene {
+  index: number
+  title?: string
+  visual: string
+  narration?: string
+  camera?: string
+  seconds: number
+  prompt: string
+}
+
+/** 视频脚本 */
+export interface VideoScript {
+  id: number
+  model: string
+  title: string
+  brief: string
+  params: Record<string, unknown>
+  script: VideoScene[]
+  scene_count: number
+  total_seconds: number
+  status: number
+  error_message?: string
+  points: number
+  self_use: boolean
+  latency_ms: number
+  created_at: string
+}
+
+/** 作品中的一段视频 */
+export interface VideoAsset {
+  url: string
+  need_auth: boolean
+  mime_type: string
+  duration_sec?: number
+}
+
+/** 视频作品（异步任务）：0 排队 / 1 生成中 / 2 成功 / 3 失败 */
+export interface VideoWork {
+  id: number
+  model: string
+  upstream_model?: string
+  prompt: string
+  params: Record<string, unknown>
+  videos: VideoAsset[]
+  status: number
+  status_text: 'queued' | 'processing' | 'succeeded' | 'failed'
+  task_id?: string
+  progress: number
+  duration_sec: number
+  error_message?: string
+  points: number
+  self_use: boolean
+  channel_id: number
+  latency_ms: number
+  created_at: string
+  updated_at: string
+}
+
+/** 提交生成后的即时结果：任务已入队 */
+export interface VideoSubmit {
+  work_id: number
+  status: number
+  status_text: string
+  task_id?: string
+  message: string
 }
 
 /** 在线生成入参 */

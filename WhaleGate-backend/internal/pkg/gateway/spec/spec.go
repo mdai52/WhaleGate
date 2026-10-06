@@ -55,6 +55,12 @@ type Message struct {
 	// Images 非标扩展归一化后的图片结果（生图等场景）。
 	// 上游可能放在 message.images[]（data URI）或 content 的 image_url 片段中。
 	Images []Image `json:"images,omitempty"`
+	// Reasoning 思维链正文（OpenAI 兼容生态的 message.reasoning_content）。
+	//
+	// Qwen3 等思考模型在非流式响应里把推理过程放这个字段、content 留空，
+	// 丢弃它会让客户端只看到一条空回复。请求方向刻意不回带上文思维链
+	//（与 Anthropic 适配器对 thinking 块的处理一致），只在响应方向透传。
+	Reasoning string `json:"reasoning_content,omitempty"`
 }
 
 // Image 统一图片内容。
@@ -144,6 +150,10 @@ type ParamSchema struct {
 	Exclude []string `json:"exclude,omitempty"`
 	// Defaults 用户未传参时使用的默认值（统一参数名 -> 值）。
 	Defaults map[string]interface{} `json:"defaults,omitempty"`
+	// Passthrough 透传开关：开启后能力表之外的参数不再丢弃，
+	// 而是原样写入上游请求体，由上游决定是否接受——不支持时上游报错并
+	// 原样返回给调用方。三级取值：nil 跟随全局配置，true/false 显式覆盖。
+	Passthrough *bool `json:"passthrough,omitempty"`
 }
 
 // Usage token 用量。
@@ -245,6 +255,27 @@ func (r *UnifiedResponse) Text() string {
 	return r.Choices[0].Message.Content
 }
 
+// OutputText 取模型产出的正文，content 为空时回退到思维链。
+//
+// Qwen3 等思考模型会把全部输出写进 reasoning_content 而 content 留空。
+// 对外转发必须如实透传（客户端自己决定要不要展示思考过程），
+// 但网关内部「调模型拿文本」的场景（脚本创作等）拿不到正文就等同于调用失败，
+// 因此这里显式回退，避免思考模型一律不可用。
+func (r *UnifiedResponse) OutputText() string {
+	if r == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(r.Text()); text != "" {
+		return r.Text()
+	}
+	for _, choice := range r.Choices {
+		if reasoning := strings.TrimSpace(choice.Message.Reasoning); reasoning != "" {
+			return reasoning
+		}
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------- 图片生成
 
 // ImageRequest 统一的文生图请求，字段对齐 OpenAI /v1/images/generations。
@@ -289,13 +320,15 @@ type Delta struct {
 	Role      string     `json:"role,omitempty"`
 	Content   string     `json:"content,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// Reasoning 思维链增量（delta.reasoning_content），见 Message.Reasoning。
+	Reasoning string `json:"reasoning_content,omitempty"`
 	// Images 流式场景下的图片增量（通常出现在最后一个内容块）。
 	Images []Image `json:"images,omitempty"`
 }
 
 // HasContent 判断增量块是否携带任何有效内容。
 func (d Delta) HasContent() bool {
-	return d.Role != "" || d.Content != "" || len(d.ToolCalls) > 0 || len(d.Images) > 0
+	return d.Role != "" || d.Content != "" || d.Reasoning != "" || len(d.ToolCalls) > 0 || len(d.Images) > 0
 }
 
 // StreamChoice 流式响应中的一个候选。

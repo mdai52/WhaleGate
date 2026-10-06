@@ -21,7 +21,7 @@ const columns = [
   { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 170 },
   { title: '模型', dataIndex: 'model', key: 'model' },
   { title: '上游模型', dataIndex: 'upstream_model', key: 'upstream_model' },
-  { title: 'Token', key: 'tokens', width: 170 },
+  { title: '计量', key: 'tokens', width: 190 },
   { title: '点数', dataIndex: 'points', key: 'points', width: 80 },
   { title: '耗时', dataIndex: 'latency_ms', key: 'latency_ms', width: 90 },
   { title: '首字延迟', dataIndex: 'first_token_ms', key: 'first_token_ms', width: 100 },
@@ -124,14 +124,23 @@ load()
             {{ formatTime((record as CallLog).created_at) }}
           </template>
           <template v-else-if="column.key === 'tokens'">
-            <div>
-              输入 {{ (record as CallLog).prompt_tokens }}
-              <span class="wg-muted">/</span>
-              输出 {{ (record as CallLog).completion_tokens }}
-            </div>
-            <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple" size="small">
-              思维链 {{ (record as CallLog).reasoning_tokens }}
-            </a-tag>
+            <!-- 生图按张、视频按秒计费，都没有 token 口径，这里改显示张数 / 秒数 -->
+            <template v-if="(record as CallLog).image_count > 0">
+              <a-tag color="cyan">{{ (record as CallLog).image_count }} 张</a-tag>
+            </template>
+            <template v-else-if="(record as CallLog).video_seconds > 0">
+              <a-tag color="geekblue">{{ (record as CallLog).video_seconds }} 秒视频</a-tag>
+            </template>
+            <template v-else>
+              <div>
+                输入 {{ (record as CallLog).prompt_tokens }}
+                <span class="wg-muted">/</span>
+                输出 {{ (record as CallLog).completion_tokens }}
+              </div>
+              <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple" size="small">
+                思维链 {{ (record as CallLog).reasoning_tokens }}
+              </a-tag>
+            </template>
           </template>
           <template v-else-if="column.key === 'latency_ms'">
             {{ (record as CallLog).latency_ms }} ms

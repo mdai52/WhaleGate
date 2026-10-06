@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/whalegate/whalegate/internal/model"
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
@@ -45,7 +47,9 @@ type ImageGenerateInput struct {
 	User string
 	// Extra 上游扩展参数，原样透传。
 	Extra map[string]interface{}
-	// Meta 调用日志需要的请求上下文；为 nil 时仍记录业务字段，只是缺少来源信息。
+	// GroupMultiplier 所属分组的倍率系数，在点数字上相乘；未分组传 1。
+	GroupMultiplier float64
+	// Meta 调用日志需要的请求上下文与计费主体；为 nil 时无法计费也无法归因来源。
 	Meta *ImageCallMeta
 }
 
@@ -61,6 +65,14 @@ type ImageCallMeta struct {
 	ClientIP string
 	// RequestScheme 入站协议：http / https。
 	RequestScheme string
+}
+
+// KeyID 取密钥 ID；Meta 缺失时返回 0。
+func (m *ImageCallMeta) KeyID() uint {
+	if m == nil {
+		return 0
+	}
+	return m.APIKeyID
 }
 
 // ImageGeneration 一次图片生成的结果。
@@ -79,6 +91,12 @@ type ImageGeneration struct {
 	ChannelName string
 	// LatencyMS 端到端耗时。
 	LatencyMS int64
+	// ImageCount 实际生成的张数，按张计费的计量单位。
+	ImageCount int
+	// Points 本次扣减的点数；自用模式下记录"应扣点数"，但用户余额不扣减。
+	Points int64
+	// SelfUse 本次调用发生在自用模式下（免费）。
+	SelfUse bool
 	// Response 归一后的图片结果；失败时为 nil。
 	Response *spec.ImageResponse
 }
@@ -98,8 +116,26 @@ func (g *ImageGeneration) usage() *spec.Usage {
 // 且不计入渠道健康度（把生图模型挂在聊天渠道上属于配置问题，不应触发熔断）。
 func (c *Container) GenerateImage(ctx context.Context, in ImageGenerateInput) (*ImageGeneration, error) {
 	if err := c.normalizeImageInput(&in); err != nil {
-		c.logGeneration(in, nil, model.CallStatusFailed, apierr.CodeOf(err), err.Error())
+		c.logGeneration(in, nil, model.CallStatusFailed, apierr.CodeOf(err), err.Error(), false)
 		return nil, err
+	}
+
+	// 计费：图片没有 token 维度的口径，张数是唯一可计量的单位，
+	// 因此先按"请求张数"预扣，成功后按"实际张数"多退少补。
+	// 自用模式下跳过预扣，调用免费（仍记录应扣点数用于成本分析）。
+	selfUse := c.SelfUseMode()
+	var reservation *Reservation
+	if userID := imageBillingUser(in); !selfUse && userID > 0 {
+		var err error
+		var reservePoints int64
+		if reservePoints, err = c.PointsForImage(ctx, in.Model, in.N, in.GroupMultiplier); err == nil {
+			reservation, err = c.ReserveQuota(ctx, userID, reservePoints)
+		}
+		if err != nil {
+			// 额度不足在这里就被挡住，工作台与对外接口都不必再打一次上游。
+			c.logGeneration(in, nil, model.CallStatusFailed, apierr.CodeOf(err), err.Error(), selfUse)
+			return nil, err
+		}
 	}
 
 	start := time.Now()
@@ -145,7 +181,8 @@ func (c *Container) GenerateImage(ctx context.Context, in ImageGenerateInput) (*
 		generation, err := c.generateImageOnce(ctx, channel, in, upstreamModel, override, start)
 		if err == nil {
 			c.RecordChannelSuccess(ctx, channel)
-			c.logGeneration(in, generation, model.CallStatusSuccess, 0, "")
+			c.settleImage(ctx, in, generation, reservation, selfUse)
+			c.logGeneration(in, generation, model.CallStatusSuccess, 0, "", selfUse)
 			return generation, nil
 		}
 		c.RecordChannelFailure(ctx, channel, err.Error())
@@ -160,21 +197,85 @@ func (c *Container) GenerateImage(ctx context.Context, in ImageGenerateInput) (*
 	if lastErr == nil {
 		lastErr = apierr.New(apierr.ErrNoChannel, "模型 "+in.Model+" 暂无可用渠道")
 	}
-	c.logGeneration(in, lastAttempt, model.CallStatusFailed, apierr.CodeOf(lastErr), lastErr.Error())
+	// 失败全额回补。ctx 可能因客户端断开而取消，此时退回根上下文确保回补发出。
+	if reservation != nil {
+		releaseCtx := ctx
+		if ctx.Err() != nil {
+			releaseCtx = context.Background()
+		}
+		reservation.Release(releaseCtx)
+	}
+	c.logGeneration(in, lastAttempt, model.CallStatusFailed, apierr.CodeOf(lastErr), lastErr.Error(), selfUse)
 	return nil, lastErr
+}
+
+// settleImage 结算一次成功的生图：按实际张数多退少补，并把扣除结果写回给调用方。
+//
+// 口径与 chat 转发保持一致：成功才扣费，自用模式只记录应扣点数。
+func (c *Container) settleImage(
+	ctx context.Context,
+	in ImageGenerateInput,
+	generation *ImageGeneration,
+	reservation *Reservation,
+	selfUse bool,
+) {
+	if generation == nil {
+		return
+	}
+	if generation.Response != nil {
+		generation.ImageCount = len(generation.Response.Images)
+	}
+	points, err := c.PointsForImage(ctx, in.Model, generation.ImageCount, in.GroupMultiplier)
+	if err != nil {
+		points = 0
+		if c.Logger != nil {
+			c.Logger.Warn("计算生图点数失败", zap.Error(err))
+		}
+	}
+	generation.Points = points
+	generation.SelfUse = selfUse
+	// 结算与统计要写 Redis / 数据库，请求上下文已取消时退回根上下文，避免漏结算。
+	settleCtx := ctx
+	if ctx.Err() != nil {
+		settleCtx = context.Background()
+	}
+	if reservation != nil {
+		reservation.Settle(settleCtx, points)
+	}
+	// 密钥使用统计：生图没有 token 口径，token 记 0，只累计点数与请求数。
+	if keyID := imageBillingKey(in); keyID > 0 {
+		c.UpdateAPIKeyUsage(settleCtx, keyID, 0, points)
+	}
+}
+
+// imageBillingUser / imageBillingKey 取出计费与统计主体。
+// Meta 缺失（如内部调用）时返回 0，此时跳过计费——两个入口都要求鉴权，
+// 正常链路不会走到这里。
+func imageBillingUser(in ImageGenerateInput) uint {
+	if in.Meta == nil {
+		return 0
+	}
+	return in.Meta.UserID
+}
+
+func imageBillingKey(in ImageGenerateInput) uint {
+	if in.Meta == nil {
+		return 0
+	}
+	return in.Meta.APIKeyID
 }
 
 // logGeneration 落一次图片生成的调用日志。
 //
 // 成功与失败都留痕：在线生图是用户直接触发的高成本操作，没有日志就无法
-// 按模型、渠道、错误码排查。图片没有 token 维度的计费口径，因此用量留空、
-// 点数记为 0（按张计费待后续支持）。
+// 按模型、渠道、错误码排查，也无法核对按张计费的扣减是否与实际出图一致。
 func (c *Container) logGeneration(
 	in ImageGenerateInput,
 	attempt *ImageGeneration,
 	status int,
 	errorCode int,
 	errorMessage string,
+	selfUse bool,
 ) {
 	entry := &model.CallLog{
 		Model:           in.Model,
@@ -183,6 +284,7 @@ func (c *Container) logGeneration(
 		ErrorCode:       errorCode,
 		ErrorMessage:    truncate(errorMessage, 500),
 		UsageConfidence: model.ConfidenceEstimated,
+		SelfUse:         selfUse,
 		CreatedAt:       time.Now(),
 	}
 	if meta := in.Meta; meta != nil {
@@ -198,6 +300,9 @@ func (c *Container) logGeneration(
 		entry.ChannelName = attempt.ChannelName
 		entry.UpstreamModel = attempt.UpstreamModel
 		entry.LatencyMS = attempt.LatencyMS
+		// 计费口径：张数为计量单位，点数按实际出图张数结算（失败为 0）。
+		entry.ImageCount = attempt.ImageCount
+		entry.Points = attempt.Points
 		if usage := attempt.usage(); usage != nil {
 			entry.PromptTokens = usage.PromptTokens
 			entry.CompletionTokens = usage.CompletionTokens

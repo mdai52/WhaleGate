@@ -39,6 +39,15 @@ type StudioConfig struct {
 	// DownloadTimeout 拉取上游临时图片地址的超时；图片统一转存本地，
 	// 避免上游链接过期后作品库无法回看。
 	DownloadTimeout time.Duration `mapstructure:"download_timeout"`
+	// VideoPollInterval 视频生成任务的轮询间隔。
+	VideoPollInterval time.Duration `mapstructure:"video_poll_interval"`
+	// VideoMaxWait 单个视频任务的最长等待时间，超时按失败处理并回补额度。
+	VideoMaxWait time.Duration `mapstructure:"video_max_wait"`
+	// VideoMaxSeconds 单个视频允许生成的最大秒数，防止超长任务打爆上游与额度。
+	VideoMaxSeconds int `mapstructure:"video_max_seconds"`
+	// VideoDownloadTimeout 拉取上游视频内容的超时；视频统一转存，
+	// 避免上游链接过期后作品库无法回看。
+	VideoDownloadTimeout time.Duration `mapstructure:"video_download_timeout"`
 }
 
 // SkillsConfig 技能目录配置。
@@ -237,6 +246,17 @@ type GatewayConfig struct {
 	DefaultPromptRatio float64 `mapstructure:"default_prompt_ratio"`
 	// DefaultCompletionRatio 兜底倍率：点 / 1K completion tokens（含思维链）。
 	DefaultCompletionRatio float64 `mapstructure:"default_completion_ratio"`
+	// DefaultImageRatio 生图兜底单价：点 / 张。图片生成没有 token 维度口径，
+	// 按张计费；模型倍率表里未单独配置（image_ratio = 0）的模型按此价计费。
+	// 置 0 表示全局免费。
+	DefaultImageRatio float64 `mapstructure:"default_image_ratio"`
+	// DefaultVideoRatio 视频兜底单价：点 / 秒。视频生成以「秒」为计量单位；
+	// 模型倍率表里未单独配置（video_ratio = 0）的模型按此价计费。置 0 表示全局免费。
+	DefaultVideoRatio float64 `mapstructure:"default_video_ratio"`
+	// ParamPassthrough 自定义参数透传：开启后能力表之外的参数不再丢弃，
+	// 而是原样转发给上游，上游不支持时把它的报错原样返回给调用方。
+	// 渠道可在 param_schema 里用 {"passthrough": false} 单独关闭。
+	ParamPassthrough bool `mapstructure:"param_passthrough"`
 	// EstimateCompletionTokens 上游未返回 usage 时，单次请求按该值估算输出 token。
 	EstimateCompletionTokens int `mapstructure:"estimate_completion_tokens"`
 	// QuotaFlushInterval 额度增量落库周期。
@@ -361,6 +381,12 @@ func setDefaults(v *viper.Viper) {
 	// 兜底倍率：15 点/1K 输入、60 点/1K 输出（即 ¥0.015 / ¥0.06 每千 token）
 	v.SetDefault("gateway.default_prompt_ratio", 15.0)
 	v.SetDefault("gateway.default_completion_ratio", 60.0)
+	// 兜底生图单价：200 点/张（即 ¥0.2 / 张），对齐主流图模型的公开价位
+	v.SetDefault("gateway.default_image_ratio", 200.0)
+	// 兜底视频单价：100 点/秒（即 ¥0.1 / 秒），视频成本远高于图片
+	v.SetDefault("gateway.default_video_ratio", 100.0)
+	// 自定义参数默认透传：让上游而不是网关裁决参数是否支持
+	v.SetDefault("gateway.param_passthrough", true)
 	v.SetDefault("gateway.estimate_completion_tokens", 1024)
 	v.SetDefault("gateway.quota_flush_interval", "5s")
 
@@ -387,6 +413,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("studio.data_dir", "./data/studio")
 	v.SetDefault("studio.max_images_per_request", 4)
 	v.SetDefault("studio.download_timeout", "60s")
+	v.SetDefault("studio.video_poll_interval", "5s")
+	v.SetDefault("studio.video_max_wait", "10m")
+	v.SetDefault("studio.video_max_seconds", 20)
+	v.SetDefault("studio.video_download_timeout", "180s")
 }
 
 // Validate 校验必填项与取值合法性。

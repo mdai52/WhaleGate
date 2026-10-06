@@ -59,6 +59,13 @@ func init() {
 		TokenURL:     "https://oauth2.googleapis.com/token",
 		ClientID:     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
 		ClientSecret: "GocSPY-aS3hPdD2pv8nXfUzjSSkjQIY8bT",
+		// 该 client_id 是 Gemini CLI 的公开客户端，其已登记的回调地址由 Google 维护
+		//（CLI 本机回环与官方域名），任何第三方站点都会被 Google 拒绝
+		//（错误 400: redirect_uri_mismatch）。必须用自建客户端覆盖后才能授权。
+		SetupNote: "内置的是 Gemini CLI 公开客户端，其回调地址由 Google 维护，无法登记第三方站点，" +
+			"授权必然报 400 redirect_uri_mismatch。请在 config.yaml 的 oauth.providers 里用你自己的 " +
+			"Google Cloud OAuth 客户端覆盖（id: gemini，填 client_id / client_secret / redirect_uri，" +
+			"redirect_uri 填本站地址并登记到 Google 的「已获授权的重定向 URI」）。也可以改用下方 Vertex 服务账号导入，无需 OAuth 授权。",
 		Scopes: []string{
 			"https://www.googleapis.com/auth/cloud-platform",
 			"https://www.googleapis.com/auth/userinfo.email",

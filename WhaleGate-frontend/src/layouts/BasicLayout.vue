@@ -4,8 +4,10 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ApiOutlined,
   BookOutlined,
+  BulbOutlined,
   ClusterOutlined,
   DashboardOutlined,
+  DeploymentUnitOutlined,
   ExperimentOutlined,
   FileSearchOutlined,
   HistoryOutlined,
@@ -17,8 +19,11 @@ import {
   PercentageOutlined,
   PictureOutlined,
   SafetyCertificateOutlined,
+  SafetyOutlined,
+  SettingOutlined,
   TeamOutlined,
   UserOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons-vue'
 import { Modal } from 'ant-design-vue'
 import { useUserStore } from '@/stores/user'
@@ -55,6 +60,7 @@ const menus = computed<MenuItem[]>(() => {
     { key: '/usage', label: '调用历史', icon: 'HistoryOutlined', group: '用户门户' },
     { key: '/account', label: '账号与安全', icon: 'UserOutlined', group: '用户门户' },
     { key: '/studio', label: 'AI 绘图', icon: 'PictureOutlined', group: '创意' },
+    { key: '/video-studio', label: '视频工作台', icon: 'VideoCameraOutlined', group: '创意' },
   ]
   if (userStore.isAdmin) {
     list.push(
@@ -63,6 +69,10 @@ const menus = computed<MenuItem[]>(() => {
       { key: '/admin/ratios', label: '倍率配置', icon: 'PercentageOutlined', group: '管理后台' },
       { key: '/admin/groups', label: '分组管理', icon: 'ClusterOutlined', group: '管理后台' },
       { key: '/admin/logs', label: '全局日志', icon: 'FileSearchOutlined', group: '管理后台' },
+      { key: '/admin/audit-logs', label: '安全审计', icon: 'SafetyOutlined', group: '管理后台' },
+      { key: '/admin/settings', label: '系统设置', icon: 'SettingOutlined', group: '管理后台' },
+      { key: '/admin/mcp', label: 'MCP 服务', icon: 'DeploymentUnitOutlined', group: '工具' },
+      { key: '/admin/skills', label: '技能管理', icon: 'BulbOutlined', group: '工具' },
       { key: '/admin/oauth', label: 'OAuth 登录', icon: 'SafetyCertificateOutlined', group: '凭证' },
       { key: '/admin/credentials', label: '认证文件', icon: 'IdcardOutlined', group: '凭证' },
     )
@@ -89,7 +99,9 @@ const menuGroups = computed(() => {
 const iconMap: Record<string, unknown> = {
   ApiOutlined,
   BookOutlined,
+  BulbOutlined,
   ClusterOutlined,
+  DeploymentUnitOutlined,
   DashboardOutlined,
   ExperimentOutlined,
   FileSearchOutlined,
@@ -99,7 +111,10 @@ const iconMap: Record<string, unknown> = {
   PercentageOutlined,
   PictureOutlined,
   SafetyCertificateOutlined,
+  SafetyOutlined,
+  SettingOutlined,
   TeamOutlined,
+  VideoCameraOutlined,
 }
 
 const selectedKeys = computed(() => [route.path])

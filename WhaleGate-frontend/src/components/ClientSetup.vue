@@ -9,7 +9,13 @@
 import { computed } from 'vue'
 import { CopyOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { CLIENT_PRESETS, endpointFor, snippetFor, type ClientPreset } from '@/utils/clients'
+import {
+  CLIENT_PRESETS,
+  configFor,
+  endpointFor,
+  snippetFor,
+  type ClientPreset,
+} from '@/utils/clients'
 
 const props = defineProps<{
   /** 网关根地址，如 https://gw.example.com */
@@ -45,15 +51,24 @@ async function copy(text: string, tip = '已复制') {
   }
 }
 
+/** 只有确实以配置文件接入的客户端才提供下载，避免给出无法导入的假文件 */
+function fileOf(preset: ClientPreset) {
+  return configFor(preset, ctx.value)
+}
+
 function download(preset: ClientPreset) {
-  const blob = new Blob([configOf(preset)], { type: 'text/plain;charset=utf-8' })
+  const file = fileOf(preset)
+  if (!file) {
+    return
+  }
+  const blob = new Blob([file.text], { type: file.mime })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = preset.filename ?? `${preset.key}.txt`
+  link.download = file.filename
   link.click()
   URL.revokeObjectURL(url)
-  message.success('配置文件已下载')
+  message.success(`${file.filename} 已下载`)
 }
 </script>
 
@@ -115,10 +130,16 @@ function download(preset: ClientPreset) {
               <CopyOutlined />
               复制配置
             </a-button>
-            <a-button v-if="preset.filename" size="small" @click="download(preset)">
+            <a-button v-if="fileOf(preset)" size="small" @click="download(preset)">
               <DownloadOutlined />
               下载配置
             </a-button>
+            <a-tooltip v-else title="该客户端没有配置文件形态，请按上面的要点在界面中填写">
+              <a-button size="small" disabled>
+                <DownloadOutlined />
+                无配置文件
+              </a-button>
+            </a-tooltip>
           </a-space>
         </a-card>
       </a-col>

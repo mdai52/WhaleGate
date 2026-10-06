@@ -25,8 +25,9 @@ func NewImageHandler(svc *service.Container) *ImageHandler {
 
 // Generations 文生图：解析 → 密钥策略校验 → 选路转发 → 按 OpenAI 格式回写。
 //
-// 与 chat 转发不同，图片生成是同步一次性返回，且没有 token 维度的计费口径，
-// 因此这里只落调用日志，不做额度预扣（详见 PR 说明）。
+// 与 chat 转发一样走「预扣 → 多退少补」：按请求张数预扣额度，
+// 成功后按实际出图张数结算，失败全额回补。计费在 service.GenerateImage
+// 内完成，工作台入口与之共用一份口径。
 func (h *ImageHandler) Generations(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRequestBody))
 	if err != nil {
@@ -63,17 +64,18 @@ func (h *ImageHandler) Generations(c *gin.Context) {
 	}
 
 	generation, err := h.svc.GenerateImage(c.Request.Context(), service.ImageGenerateInput{
-		Model:          req.Model,
-		Prompt:         req.Prompt,
-		NegativePrompt: req.NegativePrompt,
-		N:              req.N,
-		Size:           req.Size,
-		Quality:        req.Quality,
-		Style:          req.Style,
-		ResponseFormat: req.ResponseFormat,
-		User:           req.User,
-		Extra:          req.Extra,
-		// 日志由 GenerateImage 统一落，两个入口共用一份口径。
+		Model:           req.Model,
+		Prompt:          req.Prompt,
+		NegativePrompt:  req.NegativePrompt,
+		N:               req.N,
+		Size:            req.Size,
+		Quality:         req.Quality,
+		Style:           req.Style,
+		ResponseFormat:  req.ResponseFormat,
+		User:            req.User,
+		Extra:           req.Extra,
+		GroupMultiplier: groupMultiplier(h.svc, c),
+		// 计费与日志由 GenerateImage 统一完成，两个入口共用一份口径。
 		Meta: newImageCallMeta(h.svc, c),
 	})
 	if err != nil {

@@ -59,6 +59,9 @@ type Provider struct {
 	ClientSecret string `json:"-"`
 	// Scopes 授权范围。
 	Scopes []string `json:"scopes,omitempty"`
+	// SetupNote 面向管理员的配置提示：内置公开客户端无法直接用于自建站点时给出
+	// 原因与解决路径（如 Gemini 需自建 Google Cloud 客户端）。配置覆盖后清空。
+	SetupNote string `json:"setup_note,omitempty"`
 	// UsesPKCE 是否使用 PKCE。
 	UsesPKCE bool `json:"-"`
 	// TokenBody token 端点请求体格式，默认 form。
@@ -161,6 +164,8 @@ func LoadFromConfig(items []config.OAuthProviderConfig) {
 		}
 		if item.ClientID != "" {
 			base.ClientID = item.ClientID
+			// 管理员换用自建客户端后，内置客户端的配置提示不再适用。
+			base.SetupNote = ""
 		}
 		if item.ClientSecret != "" {
 			base.ClientSecret = item.ClientSecret

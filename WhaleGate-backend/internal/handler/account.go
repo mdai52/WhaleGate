@@ -25,6 +25,22 @@ func NewAccountHandler(svc *service.Container) *AccountHandler {
 	return &AccountHandler{svc: svc}
 }
 
+// SecurityEvents 返回当前用户最近的安全事件（登录、改密、绑定等审计留痕）。
+//
+// 与管理端「安全审计」同一份数据，但只暴露本人记录、且不提供筛选参数——
+// 用户在「账号与安全」页能看到自己账号都发生过什么、从哪些 IP 发生。
+func (h *AccountHandler) SecurityEvents(c *gin.Context) {
+	events, err := h.svc.ListUserSecurityEvents(c.Request.Context(), CurrentUserID(c), 20)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	if events == nil {
+		events = []model.AuditLog{}
+	}
+	response.OK(c, events)
+}
+
 // Bindings 返回当前用户的第三方绑定与通行密钥。
 func (h *AccountHandler) Bindings(c *gin.Context) {
 	userID := CurrentUserID(c)

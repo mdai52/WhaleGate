@@ -33,7 +33,7 @@ interface CommonParam {
 const COMMON_PARAMS: CommonParam[] = [
   { name: 'temperature', type: 'number', hint: '采样温度，越高越随机', placeholder: '0.7' },
   { name: 'top_p', type: 'number', hint: '核采样，通常与 temperature 二选一', placeholder: '0.9' },
-  { name: 'top_k', type: 'number', hint: '仅 Gemini / Anthropic 协议支持', placeholder: '40' },
+  { name: 'top_k', type: 'number', hint: 'Gemini / Anthropic 有协议映射；OpenAI 渠道按自定义参数透传', placeholder: '40' },
   { name: 'max_tokens', type: 'number', hint: '最大生成 token 数', placeholder: '1024' },
   { name: 'seed', type: 'number', hint: '随机种子，便于结果复现', placeholder: '42' },
   { name: 'frequency_penalty', type: 'number', hint: '频率惩罚', placeholder: '0' },
@@ -130,8 +130,9 @@ function resetParams() {
 }
 
 /**
- * 丢弃原因。后端在两种情况下丢弃：参数不在支持集内，或该协议没有对应字段。
- * 结合 supported 与 declared 可以还原出具体是哪种，并给出可操作的指引。
+ * 丢弃原因。默认透传下只有两类参数会被拦下：
+ * 渠道显式 exclude，或「有协议映射但渠道能力集不含它」。
+ * 能力表之外的自定义参数会原样转发给上游，不在这里出现。
  */
 function dropReason(name: string): string {
   const data = preview.value
@@ -139,13 +140,13 @@ function dropReason(name: string): string {
     return ''
   }
   if (data.excluded?.includes(name)) {
-    return '渠道明确排除了该参数'
+    return '渠道明确排除了该参数（管理员意图优先，透传也不放行）'
   }
   if (data.supported.includes(name)) {
-    return '当前协议没有对应字段，无法映射'
+    return '当前协议没有对应字段，且渠道能力集未声明支持'
   }
   return data.declared
-    ? '渠道声明的能力中不包含该参数'
+    ? '渠道声明的能力中不包含该参数，且有协议字段映射'
     : '该协议默认不支持，可在渠道的「参数能力声明」中显式开启'
 }
 
@@ -270,7 +271,7 @@ onMounted(loadModels)
         show-icon
         style="margin-bottom: 16px"
         message="先预览，再调用"
-        description="预览不向上游发起请求、不计费，结论来自与真实转发完全相同的参数分配逻辑：能立刻看出哪些参数会生效、哪些会被丢弃、最终写成了什么。"
+        description="预览不向上游发起请求、不计费，结论来自与真实转发完全相同的参数分配逻辑：能立刻看出哪些参数会写入协议字段、哪些会原样透传给上游、哪些被管理员拦下，以及最终请求体写成了什么。"
       />
 
       <a-row :gutter="[16, 16]">
@@ -324,7 +325,7 @@ onMounted(loadModels)
             v-model="customParams"
             key-placeholder="参数名，如 logit_bias"
             value-placeholder="值，支持数字 / 布尔 / JSON"
-            empty-hint="协议未标准化的参数也可以传，网关会按渠道声明的能力决定写入还是丢弃。"
+            empty-hint="协议未标准化的参数也可以传，网关默认原样透传给上游，由上游决定是否接受。"
           />
 
           <a-space style="margin-top: 16px">
@@ -383,8 +384,9 @@ onMounted(loadModels)
                 <a-tag v-for="name in preview.unknown" :key="name" color="orange">{{ name }}</a-tag>
               </a-space>
               <div class="wg-muted wg-tip">
-                这些名字不在网关的标准参数表内：若确实需要，请在渠道的「参数能力声明」里加入；
-                若是拼写错误，请对照下方的支持列表修正。能否生效仍以上面的「已应用 / 被丢弃」为准。
+                这些名字不在网关的标准参数表内，默认会<b>原样透传</b>给上游（不改名、不映射），
+                由上游决定是否接受；若上游不支持，它的报错会原样返回给调用方。
+                拼写错误请对照下方支持列表修正；能否生效仍以「已应用 / 被丢弃」为准。
               </div>
             </div>
 

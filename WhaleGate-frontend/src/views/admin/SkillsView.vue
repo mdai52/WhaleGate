@@ -34,7 +34,14 @@ async function scan() {
   scanning.value = true
   try {
     const res = await skillApi.scan(scanDir.value.trim() || undefined)
-    message.success(`扫描完成，导入 ${res.imported} 个技能`)
+    // 扫到 0 个多半是目录没写对，给出可操作的提示而不是只报数字
+    if (res.imported > 0) {
+      message.success(`扫描完成，导入 ${res.imported} 个技能`)
+    } else {
+      message.warning(
+        '未扫描到技能：请确认目录存在且每个技能子目录下有 SKILL.md（可在上方「扫描目录」显式指定，或检查配置文件的 skills.dir）',
+      )
+    }
     await load()
   } catch (error) {
     message.error(error instanceof Error ? error.message : '扫描失败')
@@ -46,6 +53,13 @@ async function scan() {
 async function toggle(row: Skill, checked: boolean) {
   await skillApi.toggle(row.id, checked)
   message.success(checked ? `已启用「${row.name}」` : `已停用「${row.name}」`)
+  await load()
+}
+
+/** 切换注入模式：全文注入省一次往返，但会占上下文；长技能适合改成仅索引 */
+async function setMode(row: Skill, mode: 'always' | 'index') {
+  await skillApi.setMode(row.id, mode)
+  message.success(`「${row.name}」已切换为${mode === 'always' ? '全文注入' : '仅索引'}`)
   await load()
 }
 
@@ -128,13 +142,30 @@ onMounted(load)
         @change="onTableChange"
       >
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'description'">
+          <template v-if="column.key === 'name'">
+            <div>{{ (record as Skill).name }}</div>
+            <!-- 展示名直观，且常与目录名不同，此前没有渲染 -->
+            <div v-if="(record as Skill).display_name && (record as Skill).display_name !== (record as Skill).name" class="wg-muted">
+              {{ (record as Skill).display_name }}
+            </div>
+          </template>
+          <template v-else-if="column.key === 'description'">
             <span class="wg-clamp">{{ (record as Skill).description || '—' }}</span>
           </template>
           <template v-else-if="column.key === 'mode'">
-            <a-tag :color="(record as Skill).mode === 'always' ? 'blue' : 'default'">
-              {{ (record as Skill).mode === 'always' ? '全文注入' : '仅索引' }}
-            </a-tag>
+            <a-space :size="4">
+              <a-tag :color="(record as Skill).mode === 'always' ? 'blue' : 'default'">
+                {{ (record as Skill).mode === 'always' ? '全文注入' : '仅索引' }}
+              </a-tag>
+              <!-- 模式此前只能在扫描时由 SKILL.md 决定，现在可直接切换 -->
+              <a-button
+                size="small"
+                type="link"
+                @click="setMode(record as Skill, (record as Skill).mode === 'always' ? 'index' : 'always')"
+              >
+                切换
+              </a-button>
+            </a-space>
           </template>
           <template v-else-if="column.key === 'enabled'">
             <a-switch

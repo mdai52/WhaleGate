@@ -39,7 +39,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		response.Fail(c, bindError(err))
 		return
 	}
-	if !h.svc.Config.Security.AllowRegistration && !IsAdmin(c) {
+	if !h.svc.RegistrationAllowed() && !IsAdmin(c) {
 		auditFail(h.svc, c, model.AuditRegister, "user", in.Username, "注册已关闭")
 		response.Fail(c, service.ErrRegistrationDisabled)
 		return

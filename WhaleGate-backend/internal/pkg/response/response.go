@@ -49,13 +49,22 @@ func NoContent(c *gin.Context) {
 }
 
 // Fail 根据错误自适应业务码与 HTTP 状态码。
+//
+// 明细优先：服务层构造的错误（参数校验、余额不足、上游报错等）都把
+// 具体原因放在 Detail 里，调用方需要看到真实原因才能自行修正；
+// 只有 Detail 为空的内部错误（如数据库异常）才回退到统一文案，
+// 避免把内部实现细节暴露出去。
 func Fail(c *gin.Context, err error) {
 	if err == nil {
 		FailCode(c, apierr.ErrInternal, "")
 		return
 	}
 	be := apierr.From(err)
-	write(c, be.HTTP, be.Errno, nil)
+	message := be.Message
+	if be.Detail != "" {
+		message = be.Detail
+	}
+	write(c, be.HTTP, apierr.Errno{Code: be.Code, HTTP: be.HTTP, Message: message}, nil)
 }
 
 // FailCode 以指定业务码失败；detail 仅写入上下文用于日志排查，不返回给客户端。

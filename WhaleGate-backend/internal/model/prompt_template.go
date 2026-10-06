@@ -3,8 +3,18 @@ package model
 import "time"
 
 // PromptTemplate 绘图工作台的提示词模板（词库条目）。
+// 词库类型：复用同一张表区分绘图提示词与视频脚本模板，避免为视频再建一套词库逻辑。
+const (
+	// PromptKindImage 绘图提示词（历史数据默认值）。
+	PromptKindImage = "image"
+	// PromptKindVideo 视频脚本模板。
+	PromptKindVideo = "video"
+)
+
 type PromptTemplate struct {
 	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// Kind 词库类型：image / video，见 PromptKind* 常量。
+	Kind string `gorm:"size:16;not null;default:'image';index" json:"kind"`
 	// Category 分类键，取值见 PromptCategories。
 	Category string `gorm:"size:32;not null;index" json:"category"`
 	// Title 标题。
@@ -50,6 +60,35 @@ var PromptCategories = []PromptCategory{
 	{Key: "editing", Label: "图像编辑 / 修饰 / 风格"},
 	{Key: "typography", Label: "字体字效"},
 	{Key: "brand", Label: "字体 / Logo / 品牌识别"},
+}
+
+// VideoPromptCategories 视频脚本词库分类，顺序即前端展示顺序。
+var VideoPromptCategories = []PromptCategory{
+	{Key: "promo", Label: "宣传 / 广告 / 品牌"},
+	{Key: "knowledge", Label: "知识 / 科普 / 讲解"},
+	{Key: "story", Label: "剧情 / 叙事 / 微电影"},
+	{Key: "vlog", Label: "Vlog / 记录 / 生活"},
+	{Key: "food", Label: "美食 / 探店"},
+	{Key: "tutorial", Label: "教程 / 演示 / 操作"},
+	{Key: "teaser", Label: "预告 / 活动 / 快节奏"},
+}
+
+// PromptCategoriesFor 按词库类型返回分类定义。
+func PromptCategoriesFor(kind string) []PromptCategory {
+	if kind == PromptKindVideo {
+		return VideoPromptCategories
+	}
+	return PromptCategories
+}
+
+// VideoPromptCategoryLabel 返回视频分类键对应的展示名，未知分类回落为键本身。
+func VideoPromptCategoryLabel(key string) string {
+	for _, c := range VideoPromptCategories {
+		if c.Key == key {
+			return c.Label
+		}
+	}
+	return key
 }
 
 // PromptCategoryLabel 返回分类键对应的展示名，未知分类回落为键本身。

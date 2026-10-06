@@ -20,6 +20,14 @@ export const skillApi = {
       data: { enabled },
     })
   },
+  /** 切换注入模式：always 全文注入 / index 仅索引 */
+  setMode(id: number, mode: 'always' | 'index') {
+    return request<Skill>({
+      url: `/admin/skills/${id}/mode`,
+      method: 'PATCH',
+      data: { mode },
+    })
+  },
   remove(id: number) {
     return request<{ id: number; deleted: boolean }>({ url: `/admin/skills/${id}`, method: 'DELETE' })
   },

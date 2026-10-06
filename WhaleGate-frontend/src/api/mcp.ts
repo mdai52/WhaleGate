@@ -18,6 +18,21 @@ export const mcpApi = {
   connect(id: number) {
     return request<MCPServer>({ url: `/admin/mcp/${id}/connect`, method: 'POST' })
   },
+  /** 连通性测试：连一次看状态与工具数，不改落库字段 */
+  test(id: number) {
+    return request<{ status: string; tool_count: number; latency_ms: number }>({
+      url: `/admin/mcp/${id}/test`,
+      method: 'POST',
+    })
+  },
+  /** 启停：停用后不再参与工具发现与调用 */
+  toggle(id: number, enabled: boolean) {
+    return request<MCPServer>({
+      url: `/admin/mcp/${id}/toggle`,
+      method: 'PATCH',
+      data: { enabled },
+    })
+  },
   /** 对外暴露的工具（含路由信息） */
   tools() {
     return request<ExposedTool[]>({ url: '/admin/mcp/tools', method: 'GET' })

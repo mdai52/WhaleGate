@@ -50,6 +50,15 @@ export interface Settings {
   studio_s3_public_base_url: string
   /** 是否使用路径风格寻址（自建 MinIO 与部分国内厂商需要） */
   studio_s3_force_path_style: boolean
+
+  // ---------------------------------------------------------------- 接入与工作台
+
+  /** 自定义参数透传：能力表之外的参数转发给上游 */
+  param_passthrough: boolean
+  /** 是否开放注册（false 时仅管理员可创建用户） */
+  allow_registration: boolean
+  /** 视频单次生成最大秒数 */
+  video_max_seconds: number
 }
 
 export const settingsApi = {

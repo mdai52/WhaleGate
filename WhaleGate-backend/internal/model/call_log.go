@@ -44,6 +44,10 @@ type CallLog struct {
 	SelfUse bool `json:"self_use"`
 	// ToolRounds 多轮工具执行轮次，0 表示未使用工具。
 	ToolRounds int `json:"tool_rounds"`
+	// ImageCount 本次调用生成的图片张数；非生图调用为 0。
+	ImageCount int `json:"image_count"`
+	// VideoSeconds 本次调用生成的视频秒数；非视频调用为 0。
+	VideoSeconds int `json:"video_seconds"`
 
 	LatencyMS    int64 `json:"latency_ms"`
 	FirstTokenMS int64 `json:"first_token_ms"`

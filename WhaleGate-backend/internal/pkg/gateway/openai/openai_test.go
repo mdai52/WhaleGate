@@ -197,6 +197,91 @@ func TestParseResponse(t *testing.T) {
 	}
 }
 
+// 思考模型（Qwen3 / DeepSeek-R1 等）把推理过程放 reasoning_content、content 留空：
+// 网关必须透传该字段，否则客户端只能看到一条空回复。
+func TestReasoningContentRoundTrip(t *testing.T) {
+	raw := []byte(`{
+      "id":"chatcmpl-r","object":"chat.completion","created":1700000000,"model":"qwen3.5-0.8b",
+      "choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":"让我想想……"},"finish_reason":"stop"}],
+      "usage":{"prompt_tokens":13,"completion_tokens":42,"total_tokens":55}
+    }`)
+	resp, err := ParseResponse(raw)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if got := resp.Choices[0].Message.Reasoning; got != "让我想想……" {
+		t.Fatalf("reasoning_content 应进入统一消息: %q", got)
+	}
+	if got := resp.Choices[0].Message.Content; got != "" {
+		t.Fatalf("content 应保持为空: %q", got)
+	}
+
+	body := BuildResponse(resp)
+	msg := body["choices"].([]map[string]interface{})[0]["message"].(map[string]interface{})
+	if msg["reasoning_content"] != "让我想想……" {
+		t.Fatalf("reasoning_content 应回写给客户端: %v", msg)
+	}
+	if msg["content"] != "" {
+		t.Fatalf("content 不应被篡改: %v", msg["content"])
+	}
+}
+
+// 流式思考增量同样需要透传，且仅含 reasoning 的块不应被当作空块丢弃。
+func TestReasoningStreamRoundTrip(t *testing.T) {
+	chunk, err := ParseStreamEvent([]byte(`{
+      "id":"chatcmpl-r","object":"chat.completion.chunk","model":"qwen3.5-0.8b",
+      "choices":[{"index":0,"delta":{"reasoning_content":"推理中"}}]
+    }`))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if chunk.Choices[0].Delta.Reasoning != "推理中" {
+		t.Fatalf("思维链增量丢失: %+v", chunk.Choices[0].Delta)
+	}
+	if !chunk.Choices[0].Delta.HasContent() {
+		t.Fatal("仅含思维链的增量不应判定为空块")
+	}
+
+	data, err := BuildStreamEvent(chunk)
+	if err != nil {
+		t.Fatalf("编码失败: %v", err)
+	}
+	if !strings.Contains(string(data), `"reasoning_content":"推理中"`) {
+		t.Fatalf("思维链增量应回写给客户端: %s", data)
+	}
+}
+
+// vLLM 0.27+ 把思维链放在 message.reasoning（而非 reasoning_content），
+// 且 content 可能为 null：两种命名都要识别，content 为 null 不能报错。
+func TestVLLMReasoningFieldRoundTrip(t *testing.T) {
+	raw := []byte(`{
+      "id":"chatcmpl-v","object":"chat.completion","created":1700000000,"model":"qwen3.5-0.8b",
+      "choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning":"我是 AI 助手"},"finish_reason":"stop"}],
+      "usage":{"prompt_tokens":16,"completion_tokens":44,"total_tokens":60}
+    }`)
+	resp, err := ParseResponse(raw)
+	if err != nil {
+		t.Fatalf("content 为 null 不应导致解析失败: %v", err)
+	}
+	msg := resp.Choices[0].Message
+	if msg.Reasoning != "我是 AI 助手" {
+		t.Fatalf("reasoning 字段应进入统一消息: %q", msg.Reasoning)
+	}
+	if msg.Content != "" {
+		t.Fatalf("null content 应归一为空串: %q", msg.Content)
+	}
+
+	body := BuildResponse(resp)
+	out := body["choices"].([]map[string]interface{})[0]["message"].(map[string]interface{})
+	// 出站统一用兼容面最广的 reasoning_content 命名。
+	if out["reasoning_content"] != "我是 AI 助手" {
+		t.Fatalf("出站应为 reasoning_content: %v", out)
+	}
+	if _, ok := out["reasoning"]; ok {
+		t.Fatalf("出站不应保留上游私有命名 reasoning: %v", out)
+	}
+}
+
 func TestParseResponseError(t *testing.T) {
 	raw := []byte(`{"error":{"message":"模型不存在","type":"invalid_request_error"}}`)
 	_, err := ParseResponse(raw)

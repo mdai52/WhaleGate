@@ -1,5 +1,6 @@
 import { request } from './http'
 import type {
+  AuditLog,
   CallLog,
   ModelRatio,
   Paged,
@@ -41,5 +42,9 @@ export const adminApi = {
   },
   listLogs(params: Record<string, unknown> = {}) {
     return request<Paged<CallLog>>({ url: '/admin/logs', method: 'GET', params })
+  },
+  /** 安全审计日志：登录、改密、密钥、渠道、额度、倍率、凭证、绑定等管理动作 */
+  listAuditLogs(params: Record<string, unknown> = {}) {
+    return request<Paged<AuditLog>>({ url: '/admin/audit-logs', method: 'GET', params })
   },
 }

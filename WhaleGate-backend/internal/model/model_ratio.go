@@ -11,11 +11,15 @@ type ModelRatio struct {
 	// PromptRatio 每千 prompt token 的点数。
 	PromptRatio float64 `gorm:"not null;default:0" json:"prompt_ratio"`
 	// CompletionRatio 每千 completion token 的点数（含思维链）。
-	CompletionRatio float64    `gorm:"not null;default:0" json:"completion_ratio"`
-	Enabled         bool       `gorm:"not null;default:true" json:"enabled"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	DeletedAt       *time.Time `json:"-"`
+	CompletionRatio float64 `gorm:"not null;default:0" json:"completion_ratio"`
+	// ImageRatio 生图单价：点 / 张。0 表示未单独配置，继承兜底单价。
+	ImageRatio float64 `gorm:"not null;default:0" json:"image_ratio"`
+	// VideoRatio 视频单价：点 / 秒。0 表示未单独配置，继承兜底单价。
+	VideoRatio float64    `gorm:"not null;default:0" json:"video_ratio"`
+	Enabled    bool       `gorm:"not null;default:true" json:"enabled"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	DeletedAt  *time.Time `json:"-"`
 }
 
 // TableName 表名。

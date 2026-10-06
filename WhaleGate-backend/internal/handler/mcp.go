@@ -102,6 +102,45 @@ func (h *MCPHandler) Connect(c *gin.Context) {
 }
 
 // Tools 列出对外暴露的工具（含路由信息）。
+// Toggle 启停单个 MCP Server：停用后不再参与工具发现与调用。
+func (h *MCPHandler) Toggle(c *gin.Context) {
+	rawID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || rawID == 0 {
+		response.Fail(c, errInvalidID)
+		return
+	}
+	id := uint(rawID)
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, bindError(err))
+		return
+	}
+	s, err := h.svc.SetMCPServerEnabled(c.Request.Context(), id, req.Enabled)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, s)
+}
+
+// Test 连通性测试：连一次并返回状态、工具数与耗时，不改任何落库字段。
+func (h *MCPHandler) Test(c *gin.Context) {
+	rawID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || rawID == 0 {
+		response.Fail(c, errInvalidID)
+		return
+	}
+	result, err := h.svc.TestMCPServer(c.Request.Context(), uint(rawID))
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, result)
+}
+
 func (h *MCPHandler) Tools(c *gin.Context) {
 	tools, err := h.svc.ListMCPTools(c.Request.Context())
 	if err != nil {

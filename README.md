@@ -60,10 +60,10 @@ make run                  # 启动服务端（默认 :8080）
 | 页面 | 说明 |
 | --- | --- |
 | 概览 | 余额 / 累计消耗 / 近 N 天请求与 Token 卡片，用量趋势图表（ECharts），快速接入示例 |
-| 接入指南 | 网关地址、鉴权方式、Python / Node / cURL / Gemini 原生可复制示例；**自定义参数传参详解**；**AI 客户端接入**（Cherry Studio / ChatBox / NextChat / LobeChat / Open WebUI / Cursor / Cline / Continue 的填法与配置下载）；常见问题 |
-| 参数调试 | 选模型、勾选或自定义参数，预览哪些会生效 / 哪些会被丢弃及原因，并查看最终发往上游的请求体；也可用真实密钥打一次实测。预览不消耗额度 |
-| 密钥管理 | 创建（明文只展示一次）、列表、吊销、删除；**一键导入**（生成各客户端配置，可复制或下载）；展示创建时间、最近使用、累计请求与累计 Token |
-| 调用历史 | 按模型 / 状态 / 时间范围筛选，展示 token、点数、耗时、首字延迟、计费置信度 |
+| 接入指南 | 网关地址、鉴权方式、Python / Node / cURL / Gemini 原生可复制示例；**自定义参数传参详解**（默认透传）；**AI 客户端接入**（Cherry Studio / ChatBox / NextChat / LobeChat / Open WebUI / Cursor / Cline / Continue 的填法与配置下载）；常见问题 |
+| 参数调试 | 选模型、勾选或自定义参数，预览哪些会写入协议字段 / 哪些原样透传 / 哪些被管理员拦下及原因，并查看最终发往上游的请求体；也可用真实密钥打一次实测。预览不消耗额度 |
+| 密钥管理 | 创建（明文只展示一次）、列表、吊销、删除；**一键导入**（生成各客户端配置，可复制或下载）；展示创建时间、最近使用、累计请求、累计 Token 与累计点数（设了额度上限时直接显示「已用 / 上限」） |
+| 调用历史 | 按模型 / 状态 / 时间范围筛选，展示 token、点数、耗时、首字延迟、计费置信度；生图调用显示张数、视频调用显示秒数 |
 | 账号与安全 | 密码修改、Passkey / WebAuthn、GitHub 绑定 |
 
 **创意**
@@ -71,6 +71,7 @@ make run                  # 启动服务端（默认 :8080）
 | 页面 | 说明 |
 | --- | --- |
 | AI 绘图 | 在线文生图工作台：左侧提示词词库（10 个分类 + 关键词检索）选模板，右侧创作面板选模型 / 尺寸 / 张数生成，生成结果转存本地并沉淀到作品库 |
+| 视频工作台 | **脚本创作**：左侧脚本模板词库（7 个分类）选模板，对话模型产出结构化分镜（画面 / 旁白 / 运镜 / 时长 / 英文画面提示词），每个镜头一键送进生成面板；**视频生成**：提交异步任务，作品库自动刷新进度；**作品库**：状态、进度、时长、扣点一览 |
 
 **管理后台**（仅管理员可见）
 
@@ -78,11 +79,13 @@ make run                  # 启动服务端（默认 :8080）
 | --- | --- |
 | 用户管理 | 创建用户、启停账号、按元调整额度（1 元 = 1000 点） |
 | 渠道管理 | 增删改查、连通性测试、**自动探测模型**（只填地址与密钥即可识别协议与模型）；支持模型名映射、模型别名 fork、参数注入、参数能力声明 |
-| 倍率配置 | 以**已配置渠道的模型**为基准列出当前生效倍率（点 / 1K tokens）；未单独配置的标记为「继承兜底」并回显 `*` 倍率，编辑即成为该模型的自定义倍率，也可一键恢复默认 |
+| 倍率配置 | 以**已配置渠道的模型**为基准列出当前生效倍率（点 / 1K tokens）；同时列出各模型的**生图单价**（点 / 张）与**视频单价**（点 / 秒）；未单独配置的标记为「继承兜底」并回显 `*` 倍率，编辑即成为该模型的自定义倍率，也可一键恢复默认 |
+| 系统设置 | 自用模式、技能与 MCP 开关、最大工具轮次、通行密钥（RP ID / Origins）、绘图工作台存储（本地 / S3 兼容）、HTTPS 证书热加载、管理员修改自身密码 |
 | 分组管理 | 把倍率系数与 QPM / 并发上限打包成预设，供密钥创建时选用；密钥级配置优先于分组，分组为 0 时回落全局默认 |
 | 全局日志 | 按用户 / 模型 / 状态 / 时间范围检索，含参数应用与丢弃明细 |
-| MCP 服务 | MCP Server 配置（stdio / HTTP）、工具发现与路由、代执行开关、调试调用 |
-| 技能管理 | SKILL.md 目录扫描与导入、启停、全文注入 / 仅索引两种模式 |
+| 安全审计 | 登录 / 改密 / 密钥 / 渠道 / 额度 / 倍率 / 凭证 / 绑定等管理动作留痕，含操作人、IP、UA、追踪 ID，支持按用户、动作、时间范围筛选与 CSV 导出 |
+| MCP 服务 | MCP Server 配置（stdio / HTTP，支持自定义请求头）、启停、连通性测试、工具发现与路由、代执行开关、调试调用 |
+| 技能管理 | SKILL.md 目录扫描与导入、启停、全文注入 / 仅索引两种模式（列表中可直接切换） |
 | 认证文件 | OAuth 凭证导入、搜索筛选、重命名、导出下载、配额展示 |
 | 系统设置 | 自用模式（开启后免计费）、技能与 MCP 开关、最大工具轮次、管理员修改自身密码 |
 
@@ -187,15 +190,34 @@ location / {
 2. **密钥管理** → 生成 `sk-` 开头的 API Key（明文只展示一次）
 3. **接入指南** → 复制对应语言的示例代码，替换 `base_url` 与 `api_key` 即可调用
 
-网关对外地址：
+网关对外地址（`/api/v1` 为统一出口，`/v1` 双轨兼容保留）：
 
 | 协议 | 地址 |
 | --- | --- |
-| OpenAI 兼容 | `http://<host>:8080/v1/chat/completions` |
-| 文生图 | `http://<host>:8080/v1/images/generations` |
-| 模型列表 | `http://<host>:8080/v1/models` |
-| Anthropic 原生 | `http://<host>:8080/v1/messages` |
-| Gemini 原生 | `http://<host>:8080/v1beta/models/{model}:generateContent` |
+| Base URL（OpenAI） | `http://<host>:8080/api/v1` |
+| Base URL（Anthropic） | `http://<host>:8080/api`（SDK 自动追加 `/v1/messages`） |
+| 对话 | `POST /api/v1/chat/completions` |
+| Anthropic Messages | `POST /api/v1/messages` |
+| 向量 | `POST /api/v1/embeddings` |
+| 文生图 | `POST /api/v1/images/generations` |
+| 视频生成 | `POST /api/v1/videos`（`GET /api/v1/videos/{id}` 查询、`GET /api/v1/videos/{id}/content` 取内容） |
+| 模型列表 | `GET /api/v1/models` |
+| Gemini 原生 | `POST /api/v1beta/models/{model}:generateContent` |
+
+以上端点共用同一套 API Key、限流、计费与调用日志；旧地址 `/v1/*`（`/v1/chat/completions`、
+`/v1beta/models/...` 等）全部保留，存量接入无需改动。
+
+### 自定义参数透传
+
+所有 `/v1` 与 `/api/v1` 端点都接受自定义参数（顶层字段或 SDK 的 `extra_body`）。默认行为是
+**透传**：能力表之外的参数原样转发给上游，由上游裁决——不支持时上游的报错会**原样返回给调用方**
+（例如上游返回 400，调用方收到的 message 就是上游的 400 明细）。只有管理员在渠道的
+参数能力声明里显式 `exclude` 的参数才会被网关拦下。
+
+- 全局开关：`gateway.param_passthrough`（默认 true）
+- 渠道级覆盖：渠道「参数能力声明」JSON 里加 `{"passthrough": false}` 恢复旧的"先过滤再转发"
+- 协议有映射的标准参数（`temperature` → Gemini `generationConfig.temperature` 等）仍走映射，
+  不受透传影响
 
 ## 首次安装与安全
 
@@ -333,12 +355,13 @@ docker compose logs app | grep -i password
 客户端可传任意自定义参数（顶层字段或 OpenAI SDK 的 `extra_body`），系统按上游声明的能力自动分配：
 
 1. 参数名归一：`topK` / `top-k` / `max_output_tokens` 等 → 统一名（`top_k`、`max_tokens`…）
-2. 能力协商：按渠道 `param_schema.supported` 过滤（未声明则用协议默认集，可用 `exclude` 排除）
+2. 能力协商：有协议映射且被 `exclude` 的参数丢弃；其余参数默认**透传**给上游（见上文"自定义参数透传"），
+   渠道 `param_schema` 里 `{"passthrough": false}` 可恢复"先过滤再转发"
 3. 协议映射：写入上游对应字段（`temperature` → Gemini `generationConfig.temperature`、`top_k` → `topK`、`response_format` → `responseMimeType`…）
-4. 不支持的参数丢弃，避免上游报错；分配结果通过 `X-WG-Params-Applied` / `X-WG-Params-Dropped` 回显，并写入调用日志
+4. 上游不接受时它的报错原样返回给调用方；分配结果通过 `X-WG-Params-Applied` / `X-WG-Params-Dropped` 回显，并写入调用日志
 
 ```json
-{ "supported": ["temperature", "top_p", "top_k", "repetition_penalty", "max_tokens", "stop", "seed"] }
+{ "supported": ["temperature", "top_p", "top_k", "repetition_penalty", "max_tokens", "stop", "seed"], "passthrough": true }
 ```
 
 #### 分组：倍率与限流的预设
@@ -391,15 +414,23 @@ docker compose logs app | grep -i password
 - **接口**：工作台走用户态 `/api/v1/studio/*`；同时对外提供 OpenAI 兼容的 `/v1/images/generations`，
   复用同一套渠道选路与重试逻辑。
 
-> 计费说明：图片生成没有 token 维度的口径，`spec.Usage` 与 `call_logs` 也都不含「张数」字段，
-> 因此本次只落调用日志，不做额度预扣/结算；按张计费待后续补充。
-> 日志由 `service.GenerateImage` 统一落，工作台与 `/v1/images/generations` 两个入口共用一份口径：
+> 计费说明：图片生成没有 token 维度的口径，因此**以张数计费**——
+> `model_ratios.image_ratio` 为单价（点 / 张，可用 `*` 兜底，未单独配置时按
+> `gateway.default_image_ratio` 计；要全局免费把它配成 0），`call_logs.image_count` 记录实际出图张数。
+> 额度处理与 chat 转发一致：按请求张数预扣，成功按实际张数多退少补，失败全额回补，
+> 余额不足在请求发出前即被拒绝（`40201`）。工作台与 `/v1/images/generations` 两个入口共用一份口径：
 > 成功与失败都记录**渠道与上游模型**（失败恰恰最需要这两个字段），
 > 且上游 429 / 404 / 超时分别映射为限流、模型不存在、超时错误码，而不是笼统的"上游调用失败"。
 
 ### 计量计费
 
-- 倍率表 `model_ratios`：单位「点 / 1K tokens」，1 点 = 0.001 元，`*` 为兜底。
+- 倍率表 `model_ratios`：token 单位「点 / 1K tokens」，生图单位「点 / 张」（`image_ratio`），
+  视频单位「点 / 秒」（`video_ratio`），1 点 = 0.001 元，`*` 为兜底。
+  向量生成按 token 计费，与 chat 同一套倍率表。
+- 生图按张计费：按请求张数预扣，成功按实际出图张数结算；单价未配置时回落到 `gateway.default_image_ratio`
+  （默认 200 点/张，置 0 则全局免费）。
+- 视频按秒计费：按请求秒数预扣，成功按实际生成秒数结算；单价未配置时回落到 `gateway.default_video_ratio`
+  （默认 100 点/秒，置 0 则全局免费）。脚本创作按 token 计费，与 chat 转发同源。
 - 额度预扣-回补：`ReserveQuota` 用 Redis Lua 原子预扣，请求结束 `Settle` 多退少补，失败全额回补。
 - 余额不足直接拒绝（`40201`）。
 - 调用日志 `call_logs` 异步批量落库，记录模型、渠道、耗时、token、点数与 `usage_confidence`

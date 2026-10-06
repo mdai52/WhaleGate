@@ -36,6 +36,9 @@ const settings = reactive<Settings>({
   studio_s3_secret_key_set: false,
   studio_s3_public_base_url: '',
   studio_s3_force_path_style: false,
+  param_passthrough: true,
+  allow_registration: true,
+  video_max_seconds: 20,
 })
 
 // 对象存储密钥为敏感字段，仅在编辑时暂存，绝不回填展示。
@@ -103,6 +106,14 @@ const mcpEnabled = computed({
   get: () => settings.mcp_enabled,
   set: (v: boolean) => void applyChange({ mcp_enabled: v }),
 })
+
+/** 视频最大秒数失焦保存：空值回退默认，避免把非法值写进设置 */
+async function saveVideoMaxSeconds() {
+  if (!settings.video_max_seconds || settings.video_max_seconds < 1) {
+    settings.video_max_seconds = 20
+  }
+  await applyChange({ video_max_seconds: settings.video_max_seconds }, '已保存视频单次最大秒数')
+}
 
 const pwd = reactive({
   old_password: '',
@@ -262,6 +273,60 @@ onMounted(load)
           <a-input-number v-model:value="settings.mcp_max_rounds" :min="1" :max="10" style="width: 100px" />
           <a-button :loading="saving" @click="applyMaxRounds">保存</a-button>
         </a-space>
+      </div>
+    </a-card>
+
+    <a-card title="接入与工作台" :loading="loading" style="margin-top: 16px">
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">自定义参数透传</div>
+          <div class="wg-muted">
+            开启后能力表之外的参数原样转发给上游，不支持时上游报错原样返回给调用方；
+            关闭则恢复"先过滤再转发"。渠道可在参数能力声明里用
+            <code>{"passthrough": false}</code> 单独覆盖。
+          </div>
+        </div>
+        <a-switch
+          :checked="settings.param_passthrough"
+          :loading="saving"
+          checked-children="开"
+          un-checked-children="关"
+          @change="(v: boolean) => applyChange({ param_passthrough: v }, v ? '已开启参数透传' : '已关闭参数透传，恢复先过滤再转发')"
+        />
+      </div>
+
+      <a-divider style="margin: 12px 0" />
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">开放注册</div>
+          <div class="wg-muted">关闭后仅管理员可创建用户，注册接口对普通访客返回错误</div>
+        </div>
+        <a-switch
+          :checked="settings.allow_registration"
+          :loading="saving"
+          checked-children="开"
+          un-checked-children="关"
+          @change="(v: boolean) => applyChange({ allow_registration: v }, v ? '已开放注册' : '已关闭注册，仅管理员可创建用户')"
+        />
+      </div>
+
+      <a-divider style="margin: 12px 0" />
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">视频单次最大秒数</div>
+          <div class="wg-muted">
+            限制单次视频生成的时长上限（1-60 秒），防止超长任务打爆上游与额度；更长需求应拆镜头
+          </div>
+        </div>
+        <a-input-number
+          v-model:value="settings.video_max_seconds"
+          :min="1"
+          :max="60"
+          style="width: 110px"
+          @blur="saveVideoMaxSeconds"
+        />
       </div>
     </a-card>
 

@@ -42,6 +42,47 @@ func (l *Local) Open(_ context.Context, key string) (io.ReadCloser, error) {
 	return os.Open(abs)
 }
 
+// Size 读取文件大小，供视频分段回读应答 HTTP Range。
+func (l *Local) Size(_ context.Context, key string) (int64, error) {
+	abs, err := l.abs(key)
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+// OpenRange 打开本地文件并定位到指定字节区间，避免整段读取。
+func (l *Local) OpenRange(_ context.Context, key string, start, end int64) (io.ReadCloser, error) {
+	if start < 0 || end < start {
+		return nil, ErrInvalidKey
+	}
+	abs, err := l.abs(key)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(abs)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return &sectionReader{Closer: file, Reader: io.LimitReader(file, end-start+1)}, nil
+}
+
+// sectionReader 把 io.Reader 包装成 ReadCloser，关闭时一并关闭底层文件。
+type sectionReader struct {
+	io.Reader
+	Closer io.Closer
+}
+
+func (s *sectionReader) Close() error { return s.Closer.Close() }
+
 // Delete 删除根目录下该前缀对应的整个目录。
 func (l *Local) Delete(_ context.Context, prefix string) error {
 	if strings.TrimSpace(prefix) == "" {

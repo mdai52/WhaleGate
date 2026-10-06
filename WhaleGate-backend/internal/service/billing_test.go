@@ -2,9 +2,11 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/whalegate/whalegate/internal/config"
 	"github.com/whalegate/whalegate/internal/model"
+	"github.com/whalegate/whalegate/internal/pkg/cache"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
 )
 
@@ -13,9 +15,23 @@ func newTestContainer() *Container {
 		Gateway: config.GatewayConfig{
 			DefaultPromptRatio:       15,
 			DefaultCompletionRatio:   60,
+			DefaultImageRatio:        200,
 			EstimateCompletionTokens: 1024,
 		},
 	}}
+}
+
+// newRatioContainer 构造带倍率表缓存的容器，避免测试穿透到数据库。
+func newRatioContainer(t *testing.T, ratios ...model.ModelRatio) *Container {
+	t.Helper()
+	c := newTestContainer()
+	c.KeyCache = cache.NewTTLCache(time.Minute, 128)
+	table := make(map[string]model.ModelRatio, len(ratios))
+	for _, r := range ratios {
+		table[r.Model] = r
+	}
+	c.KeyCache.Set(ratioCacheKey, table)
+	return c
 }
 
 func TestEstimateUsageText(t *testing.T) {
@@ -79,6 +95,92 @@ func TestUsageAddIncludesReasoning(t *testing.T) {
 	total.Add(&spec.Usage{PromptTokens: 2, CompletionTokens: 3, ReasoningTokens: 2, TotalTokens: 5})
 	if total.ReasoningTokens != 3 || total.TotalTokens != 8 {
 		t.Fatalf("累加错误: %+v", total)
+	}
+}
+
+// ---------------------------------------------------------------- 生图按张计费
+
+func TestImageRatioFallsBackToDefault(t *testing.T) {
+	c := newRatioContainer(t)
+	got, err := c.ImageRatioFor(nil, "dall-e-3")
+	if err != nil {
+		t.Fatalf("取生图单价失败: %v", err)
+	}
+	if got != 200 {
+		t.Fatalf("未配置时应回落到全局默认单价: %v", got)
+	}
+}
+
+func TestImageRatioModelOverridesWildcard(t *testing.T) {
+	c := newRatioContainer(t,
+		model.ModelRatio{Model: "*", ImageRatio: 150},
+		model.ModelRatio{Model: "dall-e-3", ImageRatio: 350},
+	)
+	// 通配符先兜底，逐模型配置再覆盖，取值顺序需与 token 倍率一致。
+	fallback, err := c.ImageRatioFor(nil, "gpt-image-1")
+	if err != nil || fallback != 150 {
+		t.Fatalf("通配符合配置优先于全局默认: %v %v", fallback, err)
+	}
+	custom, err := c.ImageRatioFor(nil, "dall-e-3")
+	if err != nil || custom != 350 {
+		t.Fatalf("逐模型配置应覆盖通配符: %v %v", custom, err)
+	}
+}
+
+// 单价 0 表示"未单独配置"而非免费：页面上从兜底价开始编辑，
+// 无法区分管理员手填 0 与从未配置，统一按继承处理。
+func TestImageRatioZeroMeansInherit(t *testing.T) {
+	c := newRatioContainer(t,
+		model.ModelRatio{Model: "*", ImageRatio: 300},
+		model.ModelRatio{Model: "dall-e-3", ImageRatio: 0},
+	)
+	got, err := c.ImageRatioFor(nil, "dall-e-3")
+	if err != nil {
+		t.Fatalf("取生图单价失败: %v", err)
+	}
+	if got != 300 {
+		t.Fatalf("单价为 0 应继承兜底而非免费: %v", got)
+	}
+}
+
+func TestPointsForImage(t *testing.T) {
+	c := newRatioContainer(t, model.ModelRatio{Model: "*", ImageRatio: 200})
+
+	if got, _ := c.PointsForImage(nil, "dall-e-3", 0, 1); got != 0 {
+		t.Fatalf("张数为 0 不应计费: %d", got)
+	}
+	if got, _ := c.PointsForImage(nil, "dall-e-3", 3, 1); got != 600 {
+		t.Fatalf("3 张 × 200 点应为 600: %d", got)
+	}
+}
+
+// 分组倍率在最终点数上相乘：避免分组把 per-model 单价整条表重复一遍。
+func TestPointsForImageAppliesGroupMultiplier(t *testing.T) {
+	c := newRatioContainer(t, model.ModelRatio{Model: "*", ImageRatio: 150})
+
+	got, err := c.PointsForImage(nil, "dall-e-3", 2, 1.5)
+	if err != nil || got != 450 {
+		t.Fatalf("分组系数应在点数上相乘: %d %v", got, err)
+	}
+	// 系数必须先乘后取整：0.75 × 3 张 × 150 = 337.5 → 338，而不是先取整再乘。
+	got, _ = c.PointsForImage(nil, "dall-e-3", 3, 0.75)
+	if got != 338 {
+		t.Fatalf("四舍五入只应发生一次: %d", got)
+	}
+	if got, _ = c.PointsForImage(nil, "dall-e-3", 2, 0); got != 300 {
+		t.Fatalf("非法系数（0）应按 1 处理: %d", got)
+	}
+}
+
+func TestImageBillingFreeWhenDefaultRatioZero(t *testing.T) {
+	c := newRatioContainer(t)
+	c.Config.Gateway.DefaultImageRatio = 0
+	got, err := c.PointsForImage(nil, "dall-e-3", 4, 1)
+	if err != nil {
+		t.Fatalf("取点数失败: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("兜底单价为 0 时应免费: %d", got)
 	}
 }
 

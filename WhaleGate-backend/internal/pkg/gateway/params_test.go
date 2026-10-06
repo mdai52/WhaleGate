@@ -73,7 +73,7 @@ func TestCollectParamsExtraOverridesStandard(t *testing.T) {
 func TestApplyParamsOpenAIDefault(t *testing.T) {
 	payload := map[string]interface{}{"model": "m"}
 	params := map[string]interface{}{"temperature": 0.5, "top_k": 40}
-	report := ApplyParams(payload, ProtocolOpenAI, params, nil)
+	report := ApplyParams(payload, ProtocolOpenAI, params, nil, false)
 
 	if payload["temperature"] != 0.5 {
 		t.Fatalf("temperature 应写入: %+v", payload)
@@ -89,7 +89,7 @@ func TestApplyParamsOpenAIDefault(t *testing.T) {
 func TestApplyParamsGeminiMapping(t *testing.T) {
 	payload := map[string]interface{}{"contents": []interface{}{}}
 	params := map[string]interface{}{"temperature": 0.4, "top_k": 20, "max_tokens": 512}
-	ApplyParams(payload, ProtocolGemini, params, nil)
+	ApplyParams(payload, ProtocolGemini, params, nil, false)
 
 	cfg := payload["generationConfig"].(map[string]interface{})
 	if cfg["temperature"] != 0.4 || cfg["topK"] != 20 || cfg["maxOutputTokens"] != 512 {
@@ -100,7 +100,7 @@ func TestApplyParamsGeminiMapping(t *testing.T) {
 func TestApplyParamsResponseFormatConversion(t *testing.T) {
 	payload := map[string]interface{}{}
 	ApplyParams(payload, ProtocolGemini,
-		map[string]interface{}{"response_format": map[string]interface{}{"type": "json_object"}}, nil)
+		map[string]interface{}{"response_format": map[string]interface{}{"type": "json_object"}}, nil, false)
 	cfg := payload["generationConfig"].(map[string]interface{})
 	if cfg["responseMimeType"] != "application/json" {
 		t.Fatalf("response_format 转换错误: %+v", cfg)
@@ -112,7 +112,7 @@ func TestApplyParamsSchemaSupported(t *testing.T) {
 	payload := map[string]interface{}{}
 	schema := &spec.ParamSchema{Supported: []string{"temperature", "top_k", "repetition_penalty"}}
 	report := ApplyParams(payload, ProtocolOpenAI,
-		map[string]interface{}{"temperature": 0.3, "top_k": 30, "repetition_penalty": 1.1, "seed": 7}, schema)
+		map[string]interface{}{"temperature": 0.3, "top_k": 30, "repetition_penalty": 1.1, "seed": 7}, schema, false)
 
 	if payload["top_k"] != 30 || payload["repetition_penalty"] != 1.1 {
 		t.Fatalf("声明支持的参数应写入: %+v", payload)
@@ -131,7 +131,7 @@ func TestApplyParamsExcludeWins(t *testing.T) {
 		Supported: []string{"temperature", "top_p"},
 		Exclude:   []string{"temperature"},
 	}
-	ApplyParams(payload, ProtocolOpenAI, map[string]interface{}{"temperature": 0.9}, schema)
+	ApplyParams(payload, ProtocolOpenAI, map[string]interface{}{"temperature": 0.9}, schema, false)
 	if _, ok := payload["temperature"]; ok {
 		t.Fatalf("exclude 优先级应高于 supported: %+v", payload)
 	}
@@ -144,7 +144,7 @@ func TestApplyParamsRemovesUnsupportedWrittenValue(t *testing.T) {
 	}
 	schema := &spec.ParamSchema{Exclude: []string{"temperature"}}
 	ApplyParams(payload, ProtocolGemini,
-		map[string]interface{}{"temperature": 0.8}, schema)
+		map[string]interface{}{"temperature": 0.8}, schema, false)
 	if cfg, ok := payload["generationConfig"]; ok {
 		t.Fatalf("不支持的参数应连 generationConfig 一起清理: %+v", cfg)
 	}
@@ -153,16 +153,85 @@ func TestApplyParamsRemovesUnsupportedWrittenValue(t *testing.T) {
 func TestApplyParamsDefaults(t *testing.T) {
 	payload := map[string]interface{}{}
 	schema := &spec.ParamSchema{Defaults: map[string]interface{}{"temperature": 0.2}}
-	ApplyParams(payload, ProtocolOpenAI, map[string]interface{}{}, schema)
+	ApplyParams(payload, ProtocolOpenAI, map[string]interface{}{}, schema, false)
 	if payload["temperature"] != 0.2 {
 		t.Fatalf("默认值未生效: %+v", payload)
 	}
 
 	// 用户显式传参时默认值不生效。
 	payload = map[string]interface{}{}
-	ApplyParams(payload, ProtocolOpenAI, map[string]interface{}{"temperature": 0.9}, schema)
+	ApplyParams(payload, ProtocolOpenAI, map[string]interface{}{"temperature": 0.9}, schema, false)
 	if payload["temperature"] != 0.9 {
 		t.Fatalf("用户传参应覆盖默认值: %+v", payload)
+	}
+}
+
+// ---------------------------------------------------------------- 透传模式
+
+// 透传模式下，能力表之外的自定义参数不再丢弃，而是按原始名写入上游请求体，
+// 由上游决定是否接受——不支持时上游报错并原样返回给调用方。
+func TestApplyParamsPassthroughForwardsUnknown(t *testing.T) {
+	payload := map[string]interface{}{"model": "m"}
+	report := ApplyParams(payload, ProtocolOpenAI,
+		map[string]interface{}{
+			"temperature":          0.5,
+			"chat_template_kwargs": map[string]interface{}{"enable_thinking": false},
+		}, nil, true)
+
+	if payload["temperature"] != 0.5 {
+		t.Fatalf("标准参数仍应走映射: %+v", payload)
+	}
+	if payload["chat_template_kwargs"] == nil {
+		t.Fatalf("自定义参数应原样透传: %+v", payload)
+	}
+	if contains(report.Dropped, "chat_template_kwargs") {
+		t.Fatalf("透传模式下自定义参数不应被丢弃: %+v", report)
+	}
+}
+
+// 透传不等于无脑放行：管理员显式 exclude 的参数仍然丢弃。
+func TestApplyParamsPassthroughStillHonorsExclude(t *testing.T) {
+	payload := map[string]interface{}{}
+	schema := &spec.ParamSchema{Exclude: []string{"temperature"}}
+	report := ApplyParams(payload, ProtocolOpenAI,
+		map[string]interface{}{"temperature": 0.9, "custom_flag": 1}, schema, true)
+
+	if _, ok := payload["temperature"]; ok {
+		t.Fatalf("exclude 在透传模式下仍应生效: %+v", payload)
+	}
+	if payload["custom_flag"] != 1 {
+		t.Fatalf("自定义参数应透传: %+v", payload)
+	}
+	if !contains(report.Dropped, ParamTemperature) {
+		t.Fatalf("排除项应出现在丢弃报告里: %+v", report)
+	}
+}
+
+// 协议不支持的标准参数（如 Anthropic 的 seed）：透传模式下按原始名写入顶层，
+// 上游不接受时会返回 4xx，调用方能看到真实原因而不是"参数悄悄消失"。
+func TestApplyParamsPassthroughRawForUnsupportedCanonical(t *testing.T) {
+	payload := map[string]interface{}{}
+	ApplyParams(payload, ProtocolAnthropic,
+		map[string]interface{}{"temperature": 0.5, "seed": 7}, nil, true)
+	if payload["temperature"] != 0.5 || payload["seed"] != 7 {
+		t.Fatalf("透传模式下不支持的参数应写入顶层: %+v", payload)
+	}
+}
+
+func TestResolvePassthrough(t *testing.T) {
+	if !ResolvePassthrough(nil, true) {
+		t.Fatal("渠道未声明时应使用全局默认")
+	}
+	if ResolvePassthrough(nil, false) {
+		t.Fatal("渠道未声明时应使用全局默认")
+	}
+	disabled := false
+	if ResolvePassthrough(&spec.ParamSchema{Passthrough: &disabled}, true) {
+		t.Fatal("渠道显式关闭应优先于全局默认")
+	}
+	enabled := true
+	if !ResolvePassthrough(&spec.ParamSchema{Passthrough: &enabled}, false) {
+		t.Fatal("渠道显式开启应优先于全局默认")
 	}
 }
 

@@ -75,6 +75,28 @@ func (h *SkillHandler) Toggle(c *gin.Context) {
 }
 
 // Delete 删除技能。
+// SetMode 切换技能的注入模式（全文 / 仅索引）。
+func (h *SkillHandler) SetMode(c *gin.Context) {
+	rawID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || rawID == 0 {
+		response.Fail(c, errInvalidID)
+		return
+	}
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, bindError(err))
+		return
+	}
+	skill, err := h.svc.SetSkillMode(c.Request.Context(), uint(rawID), req.Mode)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, skill)
+}
+
 func (h *SkillHandler) Delete(c *gin.Context) {
 	rawID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || rawID == 0 {

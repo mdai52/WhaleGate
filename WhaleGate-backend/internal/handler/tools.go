@@ -212,7 +212,8 @@ func (h *RelayHandler) prepareUpstream(
 		return "", nil, nil, "", gateway.ParamReport{}, apierr.Wrap(apierr.ErrInvalidParam, err)
 	}
 
-	report := gateway.ApplyParams(payload, channel.Type, gateway.CollectParams(req), channel.Schema())
+	passthrough := gateway.ResolvePassthrough(channel.Schema(), h.svc.ParamPassthrough())
+	report := gateway.ApplyParams(payload, channel.Type, gateway.CollectParams(req), channel.Schema(), passthrough)
 	if len(report.Applied) > 0 {
 		c.Header(headerParamsApplied, strings.Join(report.Applied, ","))
 	}

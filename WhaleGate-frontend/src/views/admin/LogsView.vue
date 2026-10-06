@@ -26,7 +26,7 @@ const columns = [
   { title: '渠道', dataIndex: 'channel_name', key: 'channel_name' },
   { title: '客户端 IP', dataIndex: 'client_ip', key: 'client_ip', width: 130 },
   { title: '协议', key: 'scheme', width: 90 },
-  { title: 'Token', key: 'tokens', width: 180 },
+  { title: '计量', key: 'tokens', width: 200 },
   { title: '点数', dataIndex: 'points', key: 'points', width: 80 },
   { title: '耗时', dataIndex: 'latency_ms', key: 'latency_ms', width: 90 },
   { title: '状态', dataIndex: 'status', key: 'status', width: 90 },
@@ -182,14 +182,23 @@ load()
             </a-tag>
           </template>
           <template v-else-if="column.key === 'tokens'">
-            <div>
-              输入 {{ (record as CallLog).prompt_tokens }}
-              <span class="wg-muted">/</span>
-              输出 {{ (record as CallLog).completion_tokens }}
-            </div>
-            <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple" size="small">
-              思维链 {{ (record as CallLog).reasoning_tokens }}
-            </a-tag>
+            <!-- 生图按张、视频按秒计费，都没有 token 口径，这里改显示张数 / 秒数 -->
+            <template v-if="(record as CallLog).image_count > 0">
+              <a-tag color="cyan">{{ (record as CallLog).image_count }} 张</a-tag>
+            </template>
+            <template v-else-if="(record as CallLog).video_seconds > 0">
+              <a-tag color="geekblue">{{ (record as CallLog).video_seconds }} 秒视频</a-tag>
+            </template>
+            <template v-else>
+              <div>
+                输入 {{ (record as CallLog).prompt_tokens }}
+                <span class="wg-muted">/</span>
+                输出 {{ (record as CallLog).completion_tokens }}
+              </div>
+              <a-tag v-if="(record as CallLog).reasoning_tokens" color="purple" size="small">
+                思维链 {{ (record as CallLog).reasoning_tokens }}
+              </a-tag>
+            </template>
           </template>
           <template v-else-if="column.key === 'latency_ms'">
             {{ (record as CallLog).latency_ms }} ms

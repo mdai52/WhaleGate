@@ -66,12 +66,25 @@ type Settings struct {
 	StudioS3PublicBaseURL string `json:"studio_s3_public_base_url"`
 	// StudioS3ForcePathStyle 是否使用路径风格寻址。
 	StudioS3ForcePathStyle bool `json:"studio_s3_force_path_style"`
+
+	// ---------------------------------------------------------------- 接入与工作台
+
+	// ParamPassthrough 自定义参数透传：能力表之外的参数转发给上游。
+	ParamPassthrough bool `json:"param_passthrough"`
+	// AllowRegistration 是否开放注册（false 时仅管理员可创建用户）。
+	AllowRegistration bool `json:"allow_registration"`
+	// VideoMaxSeconds 视频单次生成最大秒数。
+	VideoMaxSeconds int `json:"video_max_seconds"`
 }
 
 // 设置默认值。
 const (
 	defaultMCPMaxRounds = 5
 	maxMCPRounds        = 10
+	// defaultVideoMaxSeconds 视频单次最大秒数的默认值，与 config 默认一致。
+	defaultVideoMaxSeconds = 20
+	// maxVideoSecondsPerRequest 视频单次最大秒数上限：更长的需求应拆镜头。
+	maxVideoSecondsPerRequest = 60
 )
 
 // 设置缓存：转发链路高频读取，5 秒内复用快照，数据库异常时降级为上次快照。
@@ -141,6 +154,13 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 	if in.MCPMaxRounds > maxMCPRounds {
 		in.MCPMaxRounds = maxMCPRounds
 	}
+	// 视频单次最大秒数：1-60 之间收敛，防止误填导致任务超时或打爆上游。
+	if in.VideoMaxSeconds <= 0 {
+		in.VideoMaxSeconds = defaultVideoMaxSeconds
+	}
+	if in.VideoMaxSeconds > maxVideoSecondsPerRequest {
+		in.VideoMaxSeconds = maxVideoSecondsPerRequest
+	}
 
 	// 通行密钥配置校验。
 	if in.PasskeyEnabled && strings.TrimSpace(in.PasskeyRPID) == "" {
@@ -176,6 +196,9 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 		model.SettingStudioS3SecretKey:      secretCipher,
 		model.SettingStudioS3PublicBaseURL:  strings.TrimSpace(in.StudioS3PublicBaseURL),
 		model.SettingStudioS3ForcePathStyle: strconv.FormatBool(in.StudioS3ForcePathStyle),
+		model.SettingParamPassthrough:       strconv.FormatBool(in.ParamPassthrough),
+		model.SettingAllowRegistration:      strconv.FormatBool(in.AllowRegistration),
+		model.SettingVideoMaxSeconds:        strconv.Itoa(in.VideoMaxSeconds),
 	}
 	for k, v := range values {
 		row := model.AppSetting{Key: k, Value: v, UpdatedBy: userID, UpdatedAt: now}
@@ -236,6 +259,11 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 
 // Settings 返回全局设置快照（带进程内缓存，供转发链路高频调用）。
 func (c *Container) Settings() Settings {
+	// 极简容器（部分单元测试只填 Config）没有数据库，直接回空快照，
+	// 让调用方走各自的配置兜底，而不是在这里 panic。
+	if c == nil || c.DB == nil {
+		return Settings{}
+	}
 	settingsMu.RLock()
 	snap, at, ready := settingsSnap, settingsAt, settingsReady
 	settingsMu.RUnlock()
@@ -257,6 +285,9 @@ func (c *Container) Settings() Settings {
 	if cur.MCPMaxRounds <= 0 {
 		cur.MCPMaxRounds = defaultMCPMaxRounds
 	}
+	if cur.VideoMaxSeconds <= 0 {
+		cur.VideoMaxSeconds = defaultVideoMaxSeconds
+	}
 
 	settingsMu.Lock()
 	settingsSnap = *cur
@@ -268,6 +299,12 @@ func (c *Container) Settings() Settings {
 
 // SelfUseMode 返回自用模式是否开启。
 func (c *Container) SelfUseMode() bool { return c.Settings().SelfUseMode }
+
+// ParamPassthrough 返回自定义参数透传是否开启。
+func (c *Container) ParamPassthrough() bool { return c.Settings().ParamPassthrough }
+
+// RegistrationAllowed 返回是否开放注册。
+func (c *Container) RegistrationAllowed() bool { return c.Settings().AllowRegistration }
 
 // applySetting 把单个键值应用到设置结构。
 func applySetting(out *Settings, key, value string) {
@@ -317,6 +354,14 @@ func applySetting(out *Settings, key, value string) {
 		out.StudioS3PublicBaseURL = value
 	case model.SettingStudioS3ForcePathStyle:
 		out.StudioS3ForcePathStyle = value == "true" || value == "1"
+	case model.SettingParamPassthrough:
+		out.ParamPassthrough = value == "true" || value == "1"
+	case model.SettingAllowRegistration:
+		out.AllowRegistration = value == "true" || value == "1"
+	case model.SettingVideoMaxSeconds:
+		if n, err := strconv.Atoi(value); err == nil && n > 0 {
+			out.VideoMaxSeconds = n
+		}
 	}
 }
 

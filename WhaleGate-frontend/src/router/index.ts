@@ -45,6 +45,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'AI 绘图', icon: 'PictureOutlined' },
       },
       {
+        path: 'video-studio',
+        name: 'video-studio',
+        component: () => import('@/views/VideoStudioView.vue'),
+        meta: { title: '视频工作台', icon: 'VideoCameraOutlined' },
+      },
+      {
         path: 'keys',
         name: 'keys',
         component: () => import('@/views/KeysView.vue'),
@@ -99,10 +105,16 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '全局日志', icon: 'FileSearchOutlined', admin: true, group: '管理后台' },
       },
       {
-        path: 'admin/oauth',
-        name: 'admin-oauth',
-        component: () => import('@/views/admin/OAuthView.vue'),
-        meta: { title: 'OAuth 登录', icon: 'SafetyCertificateOutlined', admin: true, group: '凭证' },
+        path: 'admin/audit-logs',
+        name: 'admin-audit-logs',
+        component: () => import('@/views/admin/AuditLogsView.vue'),
+        meta: { title: '安全审计', icon: 'SafetyOutlined', admin: true, group: '管理后台' },
+      },
+      {
+        path: 'admin/settings',
+        name: 'admin-settings',
+        component: () => import('@/views/admin/SettingsView.vue'),
+        meta: { title: '系统设置', icon: 'SettingOutlined', admin: true, group: '管理后台' },
       },
       {
         path: 'admin/mcp',
@@ -115,6 +127,12 @@ const routes: RouteRecordRaw[] = [
         name: 'admin-skills',
         component: () => import('@/views/admin/SkillsView.vue'),
         meta: { title: '技能管理', icon: 'BulbOutlined', admin: true, group: '工具' },
+      },
+      {
+        path: 'admin/oauth',
+        name: 'admin-oauth',
+        component: () => import('@/views/admin/OAuthView.vue'),
+        meta: { title: 'OAuth 登录', icon: 'SafetyCertificateOutlined', admin: true, group: '凭证' },
       },
       {
         path: 'admin/credentials',

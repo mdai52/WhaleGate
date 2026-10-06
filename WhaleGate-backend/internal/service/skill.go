@@ -65,6 +65,29 @@ func (c *Container) ToggleSkill(ctx context.Context, id uint, enabled bool) (*mo
 	return s, nil
 }
 
+// SetSkillMode 切换技能的注入模式：全文注入 / 仅索引。
+//
+// 长技能全文注入会挤占上下文，索引模式只给模型名字与描述、按需再取全文；
+// 扫描时按 SKILL.md 的声明写一次，之后管理员应能按实际效果调整。
+func (c *Container) SetSkillMode(ctx context.Context, id uint, mode string) (*model.Skill, error) {
+	s, err := c.GetSkill(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	switch mode {
+	case model.SkillModeAlways, model.SkillModeIndex:
+		s.Mode = mode
+	default:
+		return nil, apierr.Errorf(apierr.ErrInvalidParam,
+			"注入模式只能是 %s（全文）或 %s（仅索引）", model.SkillModeAlways, model.SkillModeIndex)
+	}
+	if err := c.DB.WithContext(ctx).Save(s).Error; err != nil {
+		return nil, apierr.Wrap(apierr.ErrDatabase, err)
+	}
+	invalidateSkillCache()
+	return s, nil
+}
+
 // DeleteSkill 删除技能。
 func (c *Container) DeleteSkill(ctx context.Context, id uint) error {
 	if err := c.DB.WithContext(ctx).Delete(&model.Skill{}, id).Error; err != nil {

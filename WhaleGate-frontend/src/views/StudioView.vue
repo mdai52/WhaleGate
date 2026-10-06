@@ -211,7 +211,7 @@ async function generate() {
     })
     await hydrateImages([work])
     latest.value = work
-    message.success(`生成完成，用时 ${(work.latency_ms / 1000).toFixed(1)} 秒`)
+    message.success(`生成完成，用时 ${(work.latency_ms / 1000).toFixed(1)} 秒${costText(work)}`)
   } finally {
     generating.value = false
   }
@@ -263,6 +263,14 @@ function removeWork(work: ImageWork) {
 
 function formatTime(value: string) {
   return dayjs(value).format('MM-DD HH:mm')
+}
+
+/** 扣费文案：自用模式下仍展示应扣点数，但明确标注未实际计费。 */
+function costText(work: ImageWork) {
+  if (!work.points) {
+    return ''
+  }
+  return work.self_use ? `，应扣 ${work.points} 点（自用模式未计费）` : `，扣 ${work.points} 点`
 }
 </script>
 
@@ -451,6 +459,9 @@ function formatTime(value: string) {
                 <div class="wg-work-meta">
                   <a-tag>{{ work.model }}</a-tag>
                   <span class="wg-muted">{{ formatTime(work.created_at) }}</span>
+                  <a-tag v-if="work.points" color="volcano">
+                    {{ work.self_use ? '应扣' : '已扣' }} {{ work.points }} 点
+                  </a-tag>
                 </div>
               </div>
               <div class="wg-work-foot">

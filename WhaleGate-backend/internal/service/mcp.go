@@ -392,6 +392,40 @@ func (c *Container) CallMCPTool(ctx context.Context, exposedName string, args ma
 }
 
 // TestMCPServer 连通性测试：连接并拉取工具数量。
+// SetMCPServerEnabled 启停单个 MCP Server。
+//
+// 停用的服务不会被工具发现与调用命中——管理员常只想临时摘掉一个出问题的服务，
+// 而不是删掉它（删了就得重新填命令与环境变量）。
+func (c *Container) SetMCPServerEnabled(ctx context.Context, id uint, enabled bool) (*model.MCPServer, error) {
+	s, err := c.GetMCPServer(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if enabled {
+		// 启用时先回到 idle：是否真的连通要等下次连接/测试才知道。
+		s.Status = model.MCPStatusIdle
+		s.LastError = ""
+	} else {
+		s.Status = model.MCPStatusDisabled
+	}
+	// Enabled 是权威开关（连接与工具发现都看它），Status 是运行时状态，
+	// 两者必须一起改，否则界面开关与实际是否注入会不一致。
+	if err := c.DB.WithContext(ctx).Model(s).
+		Updates(map[string]interface{}{
+			"enabled":    enabled,
+			"status":     s.Status,
+			"last_error": s.LastError,
+		}).Error; err != nil {
+		return nil, apierr.Wrap(apierr.ErrDatabase, err)
+	}
+	s.Enabled = enabled
+	// 停用后立刻断开连接，避免残留客户端继续被工具调用命中。
+	if !enabled {
+		c.DisconnectMCP(id)
+	}
+	return s, nil
+}
+
 func (c *Container) TestMCPServer(ctx context.Context, id uint) (map[string]interface{}, error) {
 	start := time.Now()
 	s, err := c.ConnectMCP(ctx, id)

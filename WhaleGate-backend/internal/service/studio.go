@@ -105,14 +105,24 @@ type PromptLibrary struct {
 	Items      []PromptTemplateView `json:"items"`
 }
 
-// ListPromptLibrary 查询提示词词库，category 为空表示全部分类。
+// ListPromptLibrary 查询提示词词库，category 为空表示全部分类，kind 为 image / video。
 func (c *Container) ListPromptLibrary(ctx context.Context, category, keyword string) (*PromptLibrary, error) {
-	categories, err := c.promptCategoryCounts(ctx)
+	return c.listPromptLibrary(ctx, model.PromptKindImage, category, keyword)
+}
+
+// ListVideoPromptLibrary 查询视频脚本词库。
+func (c *Container) ListVideoPromptLibrary(ctx context.Context, category, keyword string) (*PromptLibrary, error) {
+	return c.listPromptLibrary(ctx, model.PromptKindVideo, category, keyword)
+}
+
+func (c *Container) listPromptLibrary(ctx context.Context, kind, category, keyword string) (*PromptLibrary, error) {
+	categories, err := c.promptCategoryCounts(ctx, kind)
 	if err != nil {
 		return nil, err
 	}
 
-	q := c.DB.WithContext(ctx).Model(&model.PromptTemplate{}).Where("enabled = ?", true)
+	q := c.DB.WithContext(ctx).Model(&model.PromptTemplate{}).
+		Where("enabled = ? AND kind = ?", true, kind)
 	if category = strings.TrimSpace(category); category != "" {
 		q = q.Where("category = ?", category)
 	}
@@ -143,14 +153,14 @@ func (c *Container) ListPromptLibrary(ctx context.Context, category, keyword str
 	return &PromptLibrary{Categories: categories, Items: items}, nil
 }
 
-func (c *Container) promptCategoryCounts(ctx context.Context) ([]PromptCategoryView, error) {
+func (c *Container) promptCategoryCounts(ctx context.Context, kind string) ([]PromptCategoryView, error) {
 	var rows []struct {
 		Category string
 		Total    int64
 	}
 	if err := c.DB.WithContext(ctx).Model(&model.PromptTemplate{}).
 		Select("category, COUNT(*) AS total").
-		Where("enabled = ?", true).
+		Where("enabled = ? AND kind = ?", true, kind).
 		Group("category").
 		Scan(&rows).Error; err != nil {
 		return nil, apierr.Wrap(apierr.ErrDatabase, err)
@@ -161,8 +171,9 @@ func (c *Container) promptCategoryCounts(ctx context.Context) ([]PromptCategoryV
 		counts[row.Category] = row.Total
 	}
 	// 按预定义顺序输出，保证前端分类顺序稳定；空分类保留但计数为 0。
-	out := make([]PromptCategoryView, 0, len(model.PromptCategories))
-	for _, def := range model.PromptCategories {
+	defs := model.PromptCategoriesFor(kind)
+	out := make([]PromptCategoryView, 0, len(defs))
+	for _, def := range defs {
 		out = append(out, PromptCategoryView{Key: def.Key, Label: def.Label, Count: counts[def.Key]})
 	}
 	return out, nil
@@ -204,18 +215,21 @@ func (img GeneratedImage) withURL(url string, needAuth bool) GeneratedImage {
 
 // ImageWorkView 作品视图。
 type ImageWorkView struct {
-	ID           uint                   `json:"id"`
-	Model        string                 `json:"model"`
-	Prompt       string                 `json:"prompt"`
-	Params       map[string]interface{} `json:"params"`
-	Images       []GeneratedImage       `json:"images"`
-	Status       int                    `json:"status"`
-	ImageCount   int                    `json:"image_count"`
-	LatencyMS    int                    `json:"latency_ms"`
-	Source       string                 `json:"source"`
-	ChannelID    uint                   `json:"channel_id"`
-	ErrorMessage string                 `json:"error_message,omitempty"`
-	CreatedAt    time.Time              `json:"created_at"`
+	ID         uint                   `json:"id"`
+	Model      string                 `json:"model"`
+	Prompt     string                 `json:"prompt"`
+	Params     map[string]interface{} `json:"params"`
+	Images     []GeneratedImage       `json:"images"`
+	Status     int                    `json:"status"`
+	ImageCount int                    `json:"image_count"`
+	LatencyMS  int                    `json:"latency_ms"`
+	Source     string                 `json:"source"`
+	// Points 本次生成扣除的点数；自用模式下为"应扣点数"，用户余额不扣减。
+	Points       int64     `json:"points"`
+	SelfUse      bool      `json:"self_use"`
+	ChannelID    uint      `json:"channel_id"`
+	ErrorMessage string    `json:"error_message,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // CreateImageWork 在线生成并落库为一件作品。
@@ -252,6 +266,7 @@ func (c *Container) CreateImageWork(ctx context.Context, userID uint, in ImageWo
 
 	work := &model.ImageWork{
 		UserID:    userID,
+		APIKeyID:  meta.KeyID(),
 		ChannelID: generation.ChannelID,
 		Model:     in.Model,
 		Prompt:    in.Prompt,
@@ -259,6 +274,8 @@ func (c *Container) CreateImageWork(ctx context.Context, userID uint, in ImageWo
 		Status:    model.ImageWorkStatusSuccess,
 		LatencyMS: int(generation.LatencyMS),
 		Source:    "studio",
+		Points:    generation.Points,
+		SelfUse:   generation.SelfUse,
 	}
 	if err := c.DB.WithContext(ctx).Create(work).Error; err != nil {
 		return nil, apierr.Wrap(apierr.ErrDatabase, err)
@@ -395,6 +412,8 @@ func (c *Container) toImageWorkView(work *model.ImageWork) ImageWorkView {
 		ImageCount:   work.ImageCount,
 		LatencyMS:    work.LatencyMS,
 		Source:       work.Source,
+		Points:       work.Points,
+		SelfUse:      work.SelfUse,
 		ChannelID:    work.ChannelID,
 		ErrorMessage: work.ErrorMessage,
 		CreatedAt:    work.CreatedAt,
