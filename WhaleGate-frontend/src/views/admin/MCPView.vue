@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   ApiOutlined,
+  ArrowRightOutlined,
   DeleteOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -49,6 +50,69 @@ const statusMeta: Record<string, { text: string; color: string }> = {
 }
 
 const autoTools = computed(() => tools.value.filter((t) => t.auto_execute).length)
+
+/** 空状态下的接入步骤：让人不点「新增服务」也知道接下来会发生什么 */
+const guideSteps = [
+  { title: '新增服务', desc: '填启动命令或服务地址，stdio / HTTP 都支持' },
+  { title: '连接并发现工具', desc: '点「连接」拉取工具列表，可先用「测试」确认连通' },
+  { title: '选择注入方式', desc: '透传给客户端自己执行，或开启网关代执行' },
+]
+
+/** 常用模板：一键把表单填好，用户只需改路径与令牌 */
+interface McpTemplate {
+  key: string
+  title: string
+  desc: string
+  transport: 'stdio' | 'http'
+  command?: string
+  args?: string
+  env?: string
+  url?: string
+  headers?: string
+}
+
+const templates: McpTemplate[] = [
+  {
+    key: 'filesystem',
+    title: 'Filesystem',
+    desc: '读写本地文件，最适合用来验证整条链路',
+    transport: 'stdio',
+    command: 'npx',
+    args: '-y @modelcontextprotocol/server-filesystem /tmp',
+  },
+  {
+    key: 'fetch',
+    title: 'Fetch',
+    desc: '抓取网页并转成 Markdown 喂给模型',
+    transport: 'stdio',
+    command: 'python3',
+    args: '-m mcp_server_fetch',
+  },
+  {
+    key: 'remote',
+    title: '远程 HTTP 服务',
+    desc: '接入托管在别处的 MCP 服务，常带令牌鉴权',
+    transport: 'http',
+    url: 'https://mcp.example.com/mcp',
+    headers: 'Authorization: Bearer <token>',
+  },
+]
+
+function useTemplate(t: McpTemplate) {
+  editingId.value = null
+  Object.assign(form, {
+    name: t.key,
+    transport: t.transport,
+    command: t.command ?? '',
+    args: t.args ?? '',
+    env: t.env ?? '',
+    url: t.url ?? '',
+    headers: t.headers ?? '',
+    auto_execute: false,
+    enabled: true,
+  })
+  drawerOpen.value = true
+}
 
 async function load() {
   loading.value = true
@@ -250,8 +314,16 @@ onMounted(load)
       <div class="wg-card-title" style="margin-bottom: 16px">
         <div>
           <h2 style="margin: 0">MCP 服务</h2>
-          <div class="wg-muted" style="margin-top: 4px">
-            共 {{ servers.length }} 个服务，{{ tools.length }} 个工具，其中 {{ autoTools }} 个由网关代执行
+          <div class="wg-stats">
+            <div class="wg-stat">
+              <b>{{ servers.length }}</b><span>服务</span>
+            </div>
+            <div class="wg-stat">
+              <b>{{ tools.length }}</b><span>工具</span>
+            </div>
+            <div class="wg-stat">
+              <b>{{ autoTools }}</b><span>网关代执行</span>
+            </div>
           </div>
         </div>
         <a-space>
@@ -259,7 +331,9 @@ onMounted(load)
             <ReloadOutlined />
             刷新
           </a-button>
-          <a-button @click="openCall">调试调用</a-button>
+          <a-tooltip :title="tools.length === 0 ? '先连接服务发现工具后才能调试' : ''">
+            <a-button :disabled="tools.length === 0" @click="openCall">调试调用</a-button>
+          </a-tooltip>
           <a-button type="primary" @click="openCreate">
             <PlusOutlined />
             新增服务
@@ -267,15 +341,65 @@ onMounted(load)
         </a-space>
       </div>
 
-      <a-alert
-        type="info"
-        show-icon
-        style="margin-bottom: 16px"
-        message="两种工作模式"
-        description="工具透传：把工具定义注入请求，由客户端自己执行调用循环（不改计量，风险最低）。网关代执行：网关调用 MCP 并把结果回喂模型，直到不再产生工具调用（仅非流式请求，多轮 token 累计计费）。"
-      />
+      <!-- 两种模式用并列卡片呈现，比一段塞满术语的长文案好读 -->
+      <div class="wg-modes">
+        <div class="wg-mode">
+          <div class="wg-mode-head">
+            <ApiOutlined />
+            <span>工具透传</span>
+            <a-tag color="blue">默认</a-tag>
+          </div>
+          <p>把工具定义注入请求，由客户端自己执行调用循环。</p>
+          <div class="wg-mode-foot">不改计量 · 风险最低 · 客户端需自行实现工具循环</div>
+        </div>
+        <div class="wg-mode">
+          <div class="wg-mode-head">
+            <ThunderboltOutlined />
+            <span>网关代执行</span>
+          </div>
+          <p>网关调用 MCP 并把结果回喂模型，直到不再产生工具调用。</p>
+          <div class="wg-mode-foot">仅非流式请求 · 多轮 token 累计计费 · 客户端零改动</div>
+        </div>
+      </div>
+
+      <!-- 空状态给一条可照着走的路径，而不是一张空表格 -->
+      <div v-if="servers.length === 0 && !loading" class="wg-guide">
+        <div class="wg-guide-steps">
+          <div v-for="(s, i) in guideSteps" :key="i" class="wg-guide-step">
+            <div class="wg-guide-no">{{ i + 1 }}</div>
+            <div>
+              <div class="wg-guide-title">{{ s.title }}</div>
+              <div class="wg-muted">{{ s.desc }}</div>
+            </div>
+          </div>
+        </div>
+
+        <a-divider class="wg-guide-divider">
+          <span class="wg-muted">从模板开始，填好即可连接</span>
+        </a-divider>
+
+        <div class="wg-templates">
+          <div v-for="t in templates" :key="t.key" class="wg-template" @click="useTemplate(t)">
+            <div class="wg-template-title">{{ t.title }}</div>
+            <div class="wg-muted">{{ t.desc }}</div>
+            <div class="wg-template-go">
+              使用此模板
+              <ArrowRightOutlined />
+            </div>
+          </div>
+        </div>
+
+        <div class="wg-guide-foot">
+          <a-button type="primary" @click="openCreate">
+            <PlusOutlined />
+            新增服务
+          </a-button>
+          <span class="wg-muted">模板只是预填表单，路径与令牌需要按你的环境调整</span>
+        </div>
+      </div>
 
       <a-table
+        v-else
         :columns="[
           { title: '名称', dataIndex: 'name', key: 'name' },
           { title: '传输', dataIndex: 'transport', key: 'transport' },
@@ -353,7 +477,7 @@ onMounted(load)
     </a-card>
 
     <a-card title="工具列表" style="margin-top: 16px">
-      <a-empty v-if="tools.length === 0" description="暂无工具，请先连接 MCP 服务" />
+      <a-empty v-if="tools.length === 0" description="连接服务并发现工具后，这里会列出对外暴露的工具名、说明与调用方式" />
       <a-list v-else :data-source="tools" size="small">
         <template #renderItem="{ item }">
           <a-list-item>
@@ -460,5 +584,124 @@ code {
 pre {
   margin: 0;
   font-size: 12px;
+}
+
+/* ---- 顶部统计 ---- */
+.wg-stats {
+  display: flex;
+  gap: 20px;
+  margin-top: 8px;
+}
+.wg-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.wg-stat b {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--wg-primary, #1677ff);
+}
+.wg-stat span {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* ---- 两种模式 ---- */
+.wg-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.wg-mode {
+  padding: 12px 16px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fafafa;
+}
+.wg-mode p {
+  margin: 8px 0 6px;
+  font-size: 13px;
+}
+.wg-mode-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.wg-mode-foot {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* ---- 空状态接入指引 ---- */
+.wg-guide {
+  padding: 24px 8px 8px;
+}
+.wg-guide-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+.wg-guide-step {
+  display: flex;
+  gap: 10px;
+}
+.wg-guide-no {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--wg-primary, #1677ff);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wg-guide-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.wg-guide-divider {
+  margin: 24px 0 16px;
+}
+.wg-templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+.wg-template {
+  padding: 12px 16px;
+  border: 1px dashed #d9d9d9;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.wg-template:hover {
+  border-color: var(--wg-primary, #1677ff);
+  background: #f6f9ff;
+}
+.wg-template-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.wg-template-go {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--wg-primary, #1677ff);
+}
+.wg-guide-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
 }
 </style>
