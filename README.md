@@ -9,6 +9,56 @@
 统一的 AI 大模型 API 网关：一份 OpenAI / Gemini 兼容协议入口，背后聚合多家上游渠道，
 提供模型路由、负载均衡、失败重试、计量计费与用量审计。
 
+## 特性速览
+
+- **一份协议，接住所有上游** —— 对外只暴露 OpenAI / Anthropic / Gemini 兼容入口，内部归一为
+  `UnifiedRequest` / `UnifiedResponse`，三种协议的上游之间可任意互转转发
+- **渠道聚合与容错** —— 多上游按权重负载均衡、失败自动重试、连通性测试、自动探测模型与能力
+- **三种计费口径** —— 对话按 token、生图按张、视频按秒；Redis Lua 原子「预扣-回补」，失败全额回补
+- **参数不靠猜** —— 自定义参数默认透传，协议映射与能力声明自动协商，分配结果通过响应头与调用日志回显，
+  另有「参数调试」页零成本预览
+- **模型别名与参数注入** —— 把上游模型 fork 成多个对外模型名，各自带独立 `override`，渠道编辑页提供可视化编辑器
+- **密钥、分组与限流** —— 倍率系数与 QPM / 并发打包成分组预设，按「密钥级 > 分组级 > 全局」逐层回落
+- **不止于转发** —— 内置 AI 绘图工作台、视频工作台、MCP 服务与技能注入
+- **安全默认开** —— 上游密钥、OAuth 令牌、WebAuthn 公钥全部 AES-256-GCM 加密落库，
+  支持 Passkey 免密登录、防爆破锁定与全量审计留痕
+- **开箱即用** —— Docker Compose 一键起全套，Web 安装向导完成初始化；前端全中文、响应式
+
+## 目录
+
+- [特性速览](#特性速览)
+- [技术栈](#技术栈)
+- [目录结构](#目录结构)
+- [文档](#文档)
+- [快速开始](#快速开始)
+- [功能面板](#功能面板)
+- [部署](#部署)
+  - [Docker Compose（推荐）](#方式一docker-compose推荐)
+  - [Docker 单容器](#方式二docker-单容器)
+  - [源码构建](#方式三源码构建二进制部署)
+  - [反向代理](#反向代理nginx)
+  - [升级与备份](#升级与备份)
+- [接入使用](#接入使用)
+  - [自定义参数透传](#自定义参数透传)
+- [首次安装与安全](#首次安装与安全)
+- [开源协议](#开源协议)
+- [用户中心：第三方绑定](#用户中心第三方绑定)
+- [安全设计](#安全设计)
+  - [用户数据安全](#用户数据安全)
+  - [用户信息安全](#用户信息安全)
+  - [系统安全](#系统安全)
+- [关键设计](#关键设计)
+  - [统一内部格式](#统一内部格式)
+  - [模型别名与参数注入](#模型别名与参数注入)
+  - [统一 OpenAI 协议分发](#统一-openai-协议分发)
+  - [自定义参数自动识别与分配](#自定义参数自动识别与分配)
+  - [AI 绘图工作台](#ai-绘图工作台)
+  - [计量计费](#计量计费)
+- [环境变量](#环境变量)
+- [统一响应格式](#统一响应格式)
+- [迁移](#迁移)
+- [测试](#测试)
+
 ## 技术栈
 
 | 层 | 选型 |
@@ -37,8 +87,16 @@
 │       ├── router/          # 路由注册
 │       └── service/         # 业务逻辑
 ├── WhaleGate-frontend/      # 前端（Vue3 + Vite + TS + AntDV）
+├── docs/                    # 设计说明书与数据库字典
 └── docker-compose.yml
 ```
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/design-spec.md`](docs/design-spec.md) | 设计说明书：项目定位、架构分层、协议归一、计费与安全的设计决策与验收口径 |
+| [`docs/database-dictionary.md`](docs/database-dictionary.md) | 数据库字典：全部表与字段的注释说明（注释随迁移写入 PostgreSQL，可直接在库内核对） |
 
 ## 快速开始
 
@@ -53,7 +111,7 @@ make run                  # 启动服务端（默认 :8080）
 
 ## 功能面板
 
-前端按「简体中文、现代设计、响应式」实现，分两个分组：
+前端按「简体中文、现代设计、响应式」实现，分三个分组：
 
 **用户门户**
 
@@ -87,7 +145,6 @@ make run                  # 启动服务端（默认 :8080）
 | MCP 服务 | MCP Server 配置（stdio / HTTP，支持自定义请求头）、启停、连通性测试、工具发现与路由、代执行开关、调试调用 |
 | 技能管理 | SKILL.md 目录扫描与导入、启停、全文注入 / 仅索引两种模式（列表中可直接切换） |
 | 认证文件 | OAuth 凭证导入、搜索筛选、重命名、导出下载、配额展示 |
-| 系统设置 | 自用模式（开启后免计费）、技能与 MCP 开关、最大工具轮次、管理员修改自身密码 |
 
 ## 部署
 
@@ -100,7 +157,10 @@ cd WhaleGate
 # 1. 准备配置文件
 cp WhaleGate-backend/configs/config.example.yaml WhaleGate-backend/configs/config.yaml
 
-# 2. 按需修改关键配置（数据库、Redis、加密密钥、JWT 密钥）
+# 2. 生成密钥并按需修改其它配置（数据库、Redis）
+#    jwt_secret 不短于 32 字节；encryption_key 必须恰好 32 字节
+sed -i "s|^  jwt_secret:.*|  jwt_secret: $(openssl rand -hex 32)|" WhaleGate-backend/configs/config.yaml
+sed -i "s|^  encryption_key:.*|  encryption_key: $(openssl rand -hex 16)|" WhaleGate-backend/configs/config.yaml
 vim WhaleGate-backend/configs/config.yaml
 
 # 3. 启动全部服务（Postgres / Redis / 网关）
@@ -134,8 +194,8 @@ docker run -d --name whalegate \
   -e WG_DATABASE_HOST=your-pg-host \
   -e WG_DATABASE_PASSWORD=your-pg-password \
   -e WG_REDIS_HOST=your-redis-host \
-  -e WG_SECRET_ENCRYPTION_KEY=<32字节随机字符串> \
-  -e WG_JWT_SECRET=<随机字符串> \
+  -e WG_SECURITY_ENCRYPTION_KEY=<32字节随机字符串> \
+  -e WG_SECURITY_JWT_SECRET=<随机字符串> \
   -v $(pwd)/WhaleGate-backend/configs:/app/configs \
   docker.cnb.cool/jingyu588/open/whalegate/whalegate:latest
 ```
