@@ -231,8 +231,9 @@ func (h *RelayHandler) prepareUpstream(
 	}
 
 	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, req.Stream)
-	headerName, headerValue := gateway.BuildUpstreamAuthHeader(channel.Type, apiKey)
-	headers := map[string]string{headerName: headerValue}
+	// 必须用 BuildUpstreamHeaders：Anthropic / Claude Code 渠道还需要 anthropic-version，
+	// 只带鉴权头会被上游直接判 400。
+	headers := gateway.BuildUpstreamHeaders(channel.Type, apiKey)
 	return url, headers, body, upstreamModel, report, nil
 }
 

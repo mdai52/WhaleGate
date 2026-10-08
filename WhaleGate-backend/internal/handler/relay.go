@@ -177,10 +177,16 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 	}
 
 	attempts := 1 + h.svc.Config.Gateway.MaxRetries
+	if attempts < 1 {
+		attempts = 1
+	}
 	exclude := make(map[uint]struct{}, attempts)
+	backoff := h.svc.Config.Gateway.RetryBackoff
 
 	var lastErr error
 	var toolRounds int
+	// streamed 标记是否已经向客户端写出过流式响应：此时不能再改用 JSON 错误覆盖。
+	streamed := false
 	for attempt := 0; attempt < attempts; attempt++ {
 		channel, err := h.svc.SelectChannel(ctx, req.Model, exclude)
 		if err != nil {
@@ -205,27 +211,50 @@ func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel st
 			return
 		}
 
-		h.svc.RecordChannelFailure(ctx, channel, err.Error())
+		// 客户端断开与渠道健康度无关：不记失败、不重试，直接全额回补。
+		if ctx.Err() != nil {
+			if reservation != nil {
+				reservation.Release(context.Background())
+			}
+			return
+		}
+
+		// 流式响应头已写出：错误只能留在流里，换渠道重发会追加出第二份流。
+		var committed *streamCommittedError
+		if errors.As(err, &committed) {
+			streamed = true
+			if committed.cause != nil {
+				err = committed.cause
+			}
+		}
+		retryable := isRetryable(err)
+		// 客户端自身造成的错误（参数非法、上下文超长等）不该计入渠道健康度：
+		// 否则一次坏请求会让所有渠道各记一次失败，达到阈值后把全部渠道一起熔断。
+		if streamed || retryable {
+			h.svc.RecordChannelFailure(ctx, channel, err.Error())
+		}
 		lastErr = err
 		exclude[channel.ID] = struct{}{}
 
-		// 客户端已断开或错误不可重试时立即终止。
-		if ctx.Err() != nil || !isRetryable(err) {
+		// 响应已提交或错误不可重试时立即终止。
+		if streamed || !retryable {
 			break
 		}
-	}
-
-	if ctx.Err() != nil {
-		// 客户端断开：全额回补，不重复写响应。
-		if reservation != nil {
-			reservation.Release(context.Background())
+		// 退避后再试：刚报错的上游通常需要一点恢复时间，立刻重试只会再撞一次。
+		if backoff > 0 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(backoff):
+			}
 		}
-		return
 	}
 
 	h.settleAndLog(c, clientProtocol, req, nil, nil, reservation, start,
 		model.CallStatusFailed, 0, apierr.CodeOf(lastErr), errorMessage(lastErr), selfUse, toolRounds)
-	writeRelayError(c, clientProtocol, lastErr)
+	// 流式失败的原因已经写进流里，不能再往响应体追加 JSON。
+	if !streamed {
+		writeRelayError(c, clientProtocol, lastErr)
+	}
 }
 
 // reject 记录一次「进入转发前就被拒绝」的请求：回补预扣、落调用日志并回写错误。
@@ -242,12 +271,24 @@ func (h *RelayHandler) reject(
 	err error,
 ) {
 	if reservation != nil {
-		reservation.Release(c.Request.Context())
+		reservation.Release(settleContext(c))
 	}
 	h.settleAndLog(c, clientProtocol, req, nil, nil, nil, start,
 		model.CallStatusFailed, apierr.From(err).HTTP, apierr.CodeOf(err),
 		errorMessage(err), selfUse, 0)
 	writeRelayError(c, clientProtocol, err)
+}
+
+// settleContext 返回结算与落日志使用的上下文。
+//
+// 客户端提前断开时 gin 会取消请求上下文，直接沿用会让 Redis 结算脚本与数据库写入全部失败，
+// 预扣的额度既没结算也没回补（用户余额凭空消失），因此回退到根上下文。
+// 与 service 层生图 / 视频结算的 context.Background() 回退口径一致。
+func settleContext(c *gin.Context) context.Context {
+	if ctx := c.Request.Context(); ctx.Err() == nil {
+		return ctx
+	}
+	return context.Background()
 }
 
 // settleAndLog 结算额度并异步落调用日志。
@@ -266,21 +307,30 @@ func (h *RelayHandler) settleAndLog(
 	selfUse bool,
 	toolRounds int,
 ) {
+	// 结算、密钥统计与调用日志都要写 Redis / 数据库。客户端断开时请求上下文已取消，
+	// 直接沿用会让预扣既没有结算也没有回补——用户余额凭空消失。因此回退到根上下文。
+	settleCtx := settleContext(c)
+
 	usage, confidence := resolveUsage(h.svc, req, outcome)
 
-	points, err := h.svc.PointsFor(c.Request.Context(), req.Model, usage, h.groupMultiplier(c))
+	points, err := h.svc.PointsFor(settleCtx, req.Model, usage, h.groupMultiplier(c))
 	if err != nil {
+		// 不能置 0：Settle 的语义是"多退少补"，置 0 等于把这一次调用全额退成免费。
+		// 算不出实际点数时按预扣值结算，宁可少退也不白送。
 		points = 0
+		if reservation != nil {
+			points = reservation.Reserved
+		}
 		if h.svc.Logger != nil {
-			h.svc.Logger.Warn("计算点数失败", zap.Error(err))
+			h.svc.Logger.Warn("计算点数失败，按预扣值结算", zap.Error(err))
 		}
 	}
 	if reservation != nil {
 		if status == model.CallStatusSuccess {
-			reservation.Settle(c.Request.Context(), points)
+			reservation.Settle(settleCtx, points)
 		} else {
 			// 失败全额回补。
-			reservation.Release(c.Request.Context())
+			reservation.Release(settleCtx)
 			points = 0
 		}
 	}
@@ -288,7 +338,7 @@ func (h *RelayHandler) settleAndLog(
 
 	// 密钥使用统计（成功才计入）
 	if status == model.CallStatusSuccess {
-		h.svc.UpdateAPIKeyUsage(c.Request.Context(), currentAPIKeyID(c), usage.TotalTokens, points)
+		h.svc.UpdateAPIKeyUsage(settleCtx, currentAPIKeyID(c), usage.TotalTokens, points)
 	}
 
 	entry := &model.CallLog{
@@ -494,6 +544,22 @@ func (h *RelayHandler) forwardOnce(
 	return &relayOutcome{Usage: unified.Usage, UpstreamModel: upstreamModel, Params: &report}, nil
 }
 
+// streamCommittedError 标记「流式响应头已写出」之后的失败。
+//
+// 此时错误只能写进流里，既不能再改用 JSON 错误覆盖响应，
+// 也不能换渠道重发——重发会在同一个响应体里追加第二份流。
+// 上层据此只做结算与收尾，不再重试、不再改写响应。
+type streamCommittedError struct{ cause error }
+
+func (e *streamCommittedError) Error() string {
+	if e.cause != nil {
+		return e.cause.Error()
+	}
+	return "上游流中断"
+}
+
+func (e *streamCommittedError) Unwrap() error { return e.cause }
+
 func (h *RelayHandler) forwardStream(
 	ctx context.Context,
 	c *gin.Context,
@@ -529,23 +595,39 @@ func (h *RelayHandler) forwardStream(
 	var firstToken time.Duration
 	start := time.Now()
 
+	// fail 收尾一条已经开始的流：把错误写进流里，并以 committed 标记返回，
+	// 让上层按失败结算而不是当成一次成功调用。
+	fail := func(cause error) (*relayOutcome, error) {
+		_ = encoder.WriteError(errorMessage(cause))
+		_ = encoder.Close()
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return &relayOutcome{Usage: usage, FirstToken: firstToken, UpstreamModel: upstreamModel, Params: &report},
+			&streamCommittedError{cause: cause}
+	}
+
 	for {
 		if err := ctx.Err(); err != nil {
-			return &relayOutcome{Usage: usage, FirstToken: firstToken, UpstreamModel: upstreamModel, Params: &report}, nil
+			// 客户端断开：响应已无从写起，交给上层全额回补。
+			return &relayOutcome{Usage: usage, FirstToken: firstToken, UpstreamModel: upstreamModel, Params: &report}, err
 		}
 		payload, err := scanner.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			if ctx.Err() == nil {
-				_ = encoder.WriteError("上游流中断")
-			}
-			break
+			// 上游连接中断：内容不完整，按失败结算。
+			return fail(apierr.Wrap(apierr.ErrUpstream, err))
 		}
 
 		chunk, err := decoder.Decode(payload)
-		if err != nil || chunk == nil {
+		if err != nil {
+			// 上游在流里返回的 error 事件（overloaded / rate_limit…）或无法解析的块。
+			// 不能 continue 吞掉，否则客户端只收到一个空流，网关却记一次成功。
+			return fail(apierr.Wrap(apierr.ErrUpstream, err))
+		}
+		if chunk == nil {
 			continue
 		}
 		if chunk.IsEmpty() && chunk.Usage == nil {
@@ -559,7 +641,7 @@ func (h *RelayHandler) forwardStream(
 
 		chunk.Model = reqModel(channel, chunk.Model)
 		if err := encoder.Write(chunk); err != nil {
-			break
+			return fail(apierr.Wrap(apierr.ErrUpstream, err))
 		}
 		if flusher != nil {
 			flusher.Flush()
