@@ -51,9 +51,11 @@ func NewEngine(d Deps) *gin.Engine {
 	engine.Use(middleware.SecurityHeaders(d.Config.Security))
 	engine.Use(middleware.AccessLog(d.Logger, "/healthz", "/readyz"))
 	engine.Use(middleware.CORS(d.Config.CORS))
-	// 非流式接口请求体上限 8MB（证书上传等场景由该值兜底）
-	engine.Use(middleware.BodyLimit(8 << 20))
-	engine.MaxMultipartMemory = 8 << 20
+	// 请求体上限取自 server.body_limit（证书上传等场景由该值兜底），
+	// 未配置或解析失败时回落到 8MB。
+	bodyLimit := d.Config.BodyLimitBytes()
+	engine.Use(middleware.BodyLimit(bodyLimit))
+	engine.MaxMultipartMemory = bodyLimit
 
 	registerSystem(engine, d)
 	registerAPI(engine, d)
@@ -72,7 +74,9 @@ func registerSystem(e *gin.Engine, d Deps) {
 	v1.GET("/system/info", sys.Info)
 	// 公开：首次安装向导依赖这两个接口
 	v1.GET("/system/status", sys.Status)
-	v1.POST("/system/install", sys.Install)
+	// 安装接口未初始化时是公开的，按 IP 限流以收窄被抢占的窗口。
+	v1.POST("/system/install",
+		middleware.AuthRateLimit(d.Svc, d.Config.Security.AuthRateLimit, time.Minute), sys.Install)
 }
 
 func registerAPI(e *gin.Engine, d Deps) {
@@ -96,10 +100,16 @@ func registerAPI(e *gin.Engine, d Deps) {
 	// 认证接口按 IP 限流 + 登录失败锁定（见 service.Login）
 	pub.Use(middleware.AuthRateLimit(d.Svc, d.Config.Security.AuthRateLimit, time.Minute))
 	{
-		pub.POST("/register", middleware.OptionalJWTAuth(d.Svc.JWT), auth.Register)
+		// 注册接口带可选令牌是为了让管理员能代建账号，因此同样要挡住"未改初始密码"的管理员
+		// ——否则初始管理员可以借这条不属于 authed 组的路由绕过改密限制再建一个管理员。
+		pub.POST("/register",
+			middleware.OptionalJWTAuth(d.Svc.JWT), middleware.RequirePasswordChanged(), auth.Register)
 		pub.POST("/login", auth.Login)
 		// 第三方登录：GitHub 回调与一次性票据换取令牌
 		pub.GET("/github/callback", account.GitHubCallback)
+		// 免鉴权的授权入口：未登录用户也要能发起 GitHub 登录，
+		// mode=bind 仍要求登录态（在 handler 内判定）。
+		pub.GET("/github/authorize", account.GitHubAuthorize)
 		pub.POST("/ticket", account.ExchangeTicket)
 		// 通行密钥登录（无用户名）
 		pub.POST("/passkey/login/begin", account.PasskeyLoginBegin)
@@ -108,7 +118,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 
 	// 改密与登出在初始密码状态下依然可用
 	authed := e.Group("/api/v1")
-	authed.Use(middleware.JWTAuth(d.Svc.JWT))
+	authed.Use(middleware.JWTAuth(d.Svc.JWT), middleware.RequireActiveUser(d.Svc))
 	{
 		authed.POST("/auth/logout", auth.Logout)
 		authed.POST("/auth/change-password", auth.ChangePassword)
@@ -119,7 +129,11 @@ func registerAPI(e *gin.Engine, d Deps) {
 
 	// 其余已登录接口在"未修改初始密码"时被拦截
 	authed = e.Group("/api/v1")
-	authed.Use(middleware.JWTAuth(d.Svc.JWT), middleware.RequirePasswordChanged())
+	authed.Use(
+		middleware.JWTAuth(d.Svc.JWT),
+		middleware.RequireActiveUser(d.Svc),
+		middleware.RequirePasswordChanged(),
+	)
 	{
 		keyGroup := authed.Group("/keys")
 		{
@@ -187,7 +201,14 @@ func registerAPI(e *gin.Engine, d Deps) {
 	}
 
 	adminGroup := e.Group("/api/v1/admin")
-	adminGroup.Use(middleware.JWTAuth(d.Svc.JWT), middleware.RequireRole(constant.RoleAdmin))
+	// 管理端同样受"必须修改初始密码"约束：否则初始管理员可以带着随机初始密码
+	// 直接建账号、改渠道、导凭证，初始密码的强制改密形同虚设。
+	adminGroup.Use(
+		middleware.JWTAuth(d.Svc.JWT),
+		middleware.RequireActiveUser(d.Svc),
+		middleware.RequirePasswordChanged(),
+		middleware.RequireRole(constant.RoleAdmin),
+	)
 	{
 		adminGroup.GET("/users", admin.ListUsers)
 		adminGroup.POST("/users", admin.CreateUser)

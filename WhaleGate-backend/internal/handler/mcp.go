@@ -27,7 +27,12 @@ func (h *MCPHandler) List(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	response.OK(c, list)
+	// 环境变量与请求头里常放 token，回显只保留键名。
+	masked := make([]*model.MCPServer, 0, len(list))
+	for i := range list {
+		masked = append(masked, h.svc.MaskMCPServer(&list[i]))
+	}
+	response.OK(c, masked)
 }
 
 // Create 新增 MCP 服务。
@@ -42,8 +47,8 @@ func (h *MCPHandler) Create(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	auditOK(h.svc, c, model.AuditSettingsUpdate, "mcp", strconv.FormatUint(uint64(s.ID), 10), "创建 "+s.Name)
-	response.Created(c, s)
+	auditOK(h.svc, c, model.AuditMCPCreate, "mcp", strconv.FormatUint(uint64(s.ID), 10), "创建 "+s.Name)
+	response.Created(c, h.svc.MaskMCPServer(s))
 }
 
 // Update 更新 MCP 服务。
@@ -64,8 +69,8 @@ func (h *MCPHandler) Update(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	auditOK(h.svc, c, model.AuditSettingsUpdate, "mcp", c.Param("id"), "更新配置")
-	response.OK(c, s)
+	auditOK(h.svc, c, model.AuditMCPUpdate, "mcp", c.Param("id"), "更新配置")
+	response.OK(c, h.svc.MaskMCPServer(s))
 }
 
 // Delete 删除 MCP 服务。
@@ -80,7 +85,7 @@ func (h *MCPHandler) Delete(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	auditOK(h.svc, c, model.AuditSettingsUpdate, "mcp", c.Param("id"), "删除")
+	auditOK(h.svc, c, model.AuditMCPDelete, "mcp", c.Param("id"), "删除")
 	response.OK(c, gin.H{"id": id, "deleted": true})
 }
 
@@ -97,8 +102,8 @@ func (h *MCPHandler) Connect(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	auditOK(h.svc, c, model.AuditSettingsUpdate, "mcp", c.Param("id"), "连接成功，工具 "+strconv.Itoa(s.ToolCount))
-	response.OK(c, s)
+	auditOK(h.svc, c, model.AuditMCPUpdate, "mcp", c.Param("id"), "连接成功，工具 "+strconv.Itoa(s.ToolCount))
+	response.OK(c, h.svc.MaskMCPServer(s))
 }
 
 // Tools 列出对外暴露的工具（含路由信息）。
@@ -123,7 +128,12 @@ func (h *MCPHandler) Toggle(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	response.OK(c, s)
+	action := "停用"
+	if req.Enabled {
+		action = "启用"
+	}
+	auditOK(h.svc, c, model.AuditMCPUpdate, "mcp", c.Param("id"), action)
+	response.OK(c, h.svc.MaskMCPServer(s))
 }
 
 // Test 连通性测试：连一次并返回状态、工具数与耗时，不改任何落库字段。
@@ -162,8 +172,11 @@ func (h *MCPHandler) Call(c *gin.Context) {
 	}
 	text, _, err := h.svc.CallMCPTool(c.Request.Context(), req.Name, req.Arguments)
 	if err != nil {
+		auditFail(h.svc, c, model.AuditMCPCall, "mcp", req.Name, err.Error())
 		response.Fail(c, err)
 		return
 	}
+	// 代执行的工具调用可能产生副作用，调试入口也要留痕。
+	auditOK(h.svc, c, model.AuditMCPCall, "mcp", req.Name, "")
 	response.OK(c, gin.H{"result": text})
 }

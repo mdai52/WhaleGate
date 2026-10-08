@@ -37,6 +37,15 @@ const (
 	AuditPasskeyRegister  = "passkey.register"
 	AuditPasskeyDelete    = "passkey.delete"
 	AuditSettingsUpdate   = "settings.update"
+	AuditInstall          = "install"
+	// 以下动作此前只在常量里定义、从未真正留痕，补齐后管理端才能查到。
+	AuditUserUpdate       = "user.update"
+	AuditCredentialUpdate = "credential.update"
+	AuditMCPUpdate        = "mcp.update"
+	AuditMCPCreate        = "mcp.create"
+	AuditMCPDelete        = "mcp.delete"
+	AuditMCPCall          = "mcp.call"
+	AuditSkillUpdate      = "skill.update"
 )
 
 // AuditLog 安全相关操作的审计留痕。

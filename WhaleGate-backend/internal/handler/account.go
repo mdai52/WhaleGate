@@ -167,7 +167,13 @@ func (h *AccountHandler) GitHubAuthorize(c *gin.Context) {
 		response.Fail(c, apierr.New(apierr.ErrInvalidParam, "mode 只能为 bind 或 login"))
 		return
 	}
-	url, err := h.svc.GitHubAuthorizeURL(c.Request.Context(), mode, CurrentUserID(c))
+	userID := CurrentUserID(c)
+	// 绑定必须知道绑给谁，因此要求登录态；登录模式则允许匿名发起。
+	if mode == "bind" && userID == 0 {
+		response.Fail(c, apierr.New(apierr.ErrUnauthorized, "请先登录后再绑定 GitHub"))
+		return
+	}
+	url, err := h.svc.GitHubAuthorizeURL(c.Request.Context(), mode, userID)
 	if err != nil {
 		response.Fail(c, err)
 		return

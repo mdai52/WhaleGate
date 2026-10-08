@@ -91,9 +91,12 @@ func (h *SkillHandler) SetMode(c *gin.Context) {
 	}
 	skill, err := h.svc.SetSkillMode(c.Request.Context(), uint(rawID), req.Mode)
 	if err != nil {
+		auditFail(h.svc, c, model.AuditSkillUpdate, "skill", c.Param("id"), err.Error())
 		response.Fail(c, err)
 		return
 	}
+	// 全文注入模式会把技能内容写进每一次请求，属于影响全局的行为，需要留痕。
+	auditOK(h.svc, c, model.AuditSkillUpdate, "skill", c.Param("id"), "mode="+req.Mode)
 	response.OK(c, skill)
 }
 

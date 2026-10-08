@@ -13,7 +13,38 @@ import (
 
 	"github.com/whalegate/whalegate/internal/model"
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
+	"github.com/whalegate/whalegate/internal/pkg/crypto"
 )
+
+// encryptSetting 加密写入 app_settings 的敏感值（TLS 私钥等）。
+func (c *Container) encryptSetting(v string) string {
+	if v == "" {
+		return ""
+	}
+	out, err := crypto.Encrypt(v, []byte(c.Config.Security.EncryptionKey))
+	if err != nil {
+		if c.Logger != nil {
+			c.Logger.Warn("加密设置项失败，已按明文保存", zap.Error(err))
+		}
+		return v
+	}
+	return out
+}
+
+// decryptSetting 解密读取的敏感设置。
+//
+// 解密失败时原样返回：早期版本把 TLS 私钥按明文存进了库，
+// 直接报错会让这些部署升级后 HTTPS 起不来，因此按历史明文兼容。
+func (c *Container) decryptSetting(v string) string {
+	if v == "" {
+		return ""
+	}
+	out, err := crypto.Decrypt(v, []byte(c.Config.Security.EncryptionKey))
+	if err != nil {
+		return v
+	}
+	return out
+}
 
 // Settings 全局运行时设置。
 type Settings struct {
@@ -135,8 +166,9 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 		}
 	}
 	if key == "" {
+		// 库内存的是密文，取出来要先解密才能参与证书对校验。
 		if v, ok := c.getRawSetting(ctx, model.SettingTLSKey); ok {
-			key = v
+			key = c.decryptSetting(v)
 		}
 	}
 	if enabled {
@@ -175,13 +207,14 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 
 	now := time.Now()
 	values := map[string]string{
-		model.SettingSelfUseMode:            strconv.FormatBool(in.SelfUseMode),
-		model.SettingSkillsEnabled:          strconv.FormatBool(in.SkillsEnabled),
-		model.SettingMCPEnabled:             strconv.FormatBool(in.MCPEnabled),
-		model.SettingMCPMaxRounds:           strconv.Itoa(in.MCPMaxRounds),
-		model.SettingTLSEnabled:             strconv.FormatBool(enabled),
-		model.SettingTLSCert:                cert,
-		model.SettingTLSKey:                 key,
+		model.SettingSelfUseMode:   strconv.FormatBool(in.SelfUseMode),
+		model.SettingSkillsEnabled: strconv.FormatBool(in.SkillsEnabled),
+		model.SettingMCPEnabled:    strconv.FormatBool(in.MCPEnabled),
+		model.SettingMCPMaxRounds:  strconv.Itoa(in.MCPMaxRounds),
+		model.SettingTLSEnabled:    strconv.FormatBool(enabled),
+		model.SettingTLSCert:       cert,
+		// 私钥加密落库：数据库备份、误给的只读账号都不该直接拿到私钥。
+		model.SettingTLSKey:                 c.encryptSetting(key),
 		model.SettingPasskeyEnabled:         strconv.FormatBool(in.PasskeyEnabled),
 		model.SettingPasskeyRPID:            strings.TrimSpace(in.PasskeyRPID),
 		model.SettingPasskeyRPOrigins:       strings.TrimSpace(in.PasskeyRPOrigins),

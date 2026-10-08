@@ -79,9 +79,13 @@ func (h *AdminHandler) SetUserStatus(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetUserStatus(c.Request.Context(), uint(id), req.Status); err != nil {
+		auditFail(h.svc, c, model.AuditUserStatus, "user", c.Param("id"), err.Error())
 		response.Fail(c, err)
 		return
 	}
+	// 启停账号直接影响该账号能否继续调用，属于必须留痕的管理动作。
+	auditOK(h.svc, c, model.AuditUserStatus, "user", c.Param("id"),
+		fmt.Sprintf("status=%d", req.Status))
 	response.OK(c, gin.H{"id": id, "status": req.Status})
 }
 
@@ -355,8 +359,12 @@ func (h *AdminHandler) CreateUser(c *gin.Context) {
 	}
 	user, err := h.svc.Register(c.Request.Context(), in, true)
 	if err != nil {
+		auditFail(h.svc, c, model.AuditUserCreate, "user", in.Username, err.Error())
 		response.Fail(c, err)
 		return
 	}
+	// 代建账号可能直接带管理员角色，必须留痕。
+	auditOK(h.svc, c, model.AuditUserCreate, "user",
+		strconv.FormatUint(uint64(user.ID), 10), user.Username+" role="+user.Role)
 	response.Created(c, user)
 }

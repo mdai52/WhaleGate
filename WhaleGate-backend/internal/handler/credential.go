@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -133,9 +134,12 @@ func (h *CredentialHandler) SetStatus(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetCredentialStatus(c.Request.Context(), uint(id), req.Status); err != nil {
+		auditFail(h.svc, c, model.AuditCredentialUpdate, "credential", c.Param("id"), err.Error())
 		response.Fail(c, err)
 		return
 	}
+	auditOK(h.svc, c, model.AuditCredentialUpdate, "credential", c.Param("id"),
+		fmt.Sprintf("status=%d", req.Status))
 	response.OK(c, gin.H{"id": id, "status": req.Status})
 }
 
@@ -148,9 +152,11 @@ func (h *CredentialHandler) Refresh(c *gin.Context) {
 	}
 	cred, err := h.svc.RefreshCredential(c.Request.Context(), uint(id))
 	if err != nil {
+		auditFail(h.svc, c, model.AuditCredentialUpdate, "credential", c.Param("id"), err.Error())
 		response.Fail(c, err)
 		return
 	}
+	auditOK(h.svc, c, model.AuditCredentialUpdate, "credential", c.Param("id"), "手动续期")
 	response.OK(c, cred)
 }
 

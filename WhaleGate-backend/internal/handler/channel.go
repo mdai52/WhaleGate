@@ -165,9 +165,11 @@ func (h *ChannelHandler) Test(c *gin.Context) {
 	}
 	result, err := h.svc.TestChannel(c.Request.Context(), ch)
 	if err != nil {
+		auditFail(h.svc, c, model.AuditChannelTest, "channel", c.Param("id"), err.Error())
 		response.Fail(c, err)
 		return
 	}
+	auditOK(h.svc, c, model.AuditChannelTest, "channel", c.Param("id"), ch.Name)
 	response.OK(c, result)
 }
 

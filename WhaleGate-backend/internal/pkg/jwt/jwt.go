@@ -57,7 +57,12 @@ func (m *Manager) Parse(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(*jwt.Token) (interface{}, error) {
 		return m.secret, nil
-	})
+	},
+		// 显式限定算法：否则 alg=none 或换成 RS256 的令牌也能通过校验。
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Name}),
+		// 校验签发者：避免共享同一密钥的其它服务签发的令牌被接受。
+		jwt.WithIssuer(m.issuer),
+	)
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, apierr.Wrap(apierr.ErrTokenExpired, err)

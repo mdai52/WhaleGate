@@ -13,6 +13,8 @@ const (
 	CtxUserRole = "user_role"
 	// CtxMustChangePassword 当前用户是否仍需修改初始密码。
 	CtxMustChangePassword = "must_change_password"
+	// CtxTokenIssuedAt 登录令牌的签发时间，用于判断令牌是否已被登出/改密作废。
+	CtxTokenIssuedAt = "token_issued_at"
 	// CtxAPIKeyID 当前请求使用的 API Key ID。
 	CtxAPIKeyID = "api_key_id"
 	// CtxAPIKey 当前请求使用的 API Key 实体。

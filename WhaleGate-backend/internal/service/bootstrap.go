@@ -105,6 +105,12 @@ func (c *Container) ChangePassword(ctx context.Context, userID uint, oldPassword
 	}
 
 	user.MustChangePassword = false
+
+	// 改密后此前签发的令牌必须作废：改密通常发生在密码可能已泄露时，
+	// 而 JWT 无法撤回，只能靠失效时刻让旧令牌不再被接受。
+	// 必须在签发新令牌之前调用，新令牌的签发时间晚于该时刻因而仍然有效。
+	c.RevokeUserTokens(ctx, userID)
+
 	token, err := c.JWT.Generate(jwtClaimsFor(&user))
 	if err != nil {
 		return "", apierr.Wrap(apierr.ErrInternal, err)

@@ -116,9 +116,12 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 	response.OK(c, user)
 }
 
-// Logout 登出。令牌无状态，服务端仅回执，客户端需自行丢弃令牌。
+// Logout 登出。令牌无状态无法直接撤回，服务端改为记录失效时刻，
+// 让此前签发的令牌立即不被接受；客户端仍需自行丢弃令牌。
 func (h *AuthHandler) Logout(c *gin.Context) {
-	auditOK(h.svc, c, model.AuditLogout, "user", strconv.FormatUint(uint64(CurrentUserID(c)), 10), "")
+	userID := CurrentUserID(c)
+	h.svc.RevokeUserTokens(c.Request.Context(), userID)
+	auditOK(h.svc, c, model.AuditLogout, "user", strconv.FormatUint(uint64(userID), 10), "")
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
 }
 

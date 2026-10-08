@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/whalegate/whalegate/internal/model"
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/database"
 	"github.com/whalegate/whalegate/internal/pkg/response"
@@ -61,9 +63,13 @@ func (h *SystemHandler) Install(c *gin.Context) {
 	}
 	result, err := h.svc.Install(c.Request.Context(), in)
 	if err != nil {
+		auditFail(h.svc, c, model.AuditInstall, "system", "install", err.Error())
 		response.Fail(c, err)
 		return
 	}
+	// 安装会创建第一个管理员，是最敏感的一次写操作，必须留痕。
+	auditOK(h.svc, c, model.AuditInstall, "user", strconv.FormatUint(uint64(result.User.ID), 10),
+		"创建管理员 "+result.User.Username)
 	response.Created(c, result)
 }
 

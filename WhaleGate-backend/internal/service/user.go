@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,19 @@ type LoginResult struct {
 
 // Register 创建用户。allowAdmin 为 true 时允许指定角色（管理端创建）。
 func (c *Container) Register(ctx context.Context, in RegisterInput, allowAdmin bool) (*model.User, error) {
+	return c.registerOn(ctx, c.DB, in, allowAdmin)
+}
+
+// registerOn 在指定连接（可以是事务）上创建用户。
+//
+// 首次安装需要在同一个事务里先 COUNT 再 INSERT，否则并发请求会各自看到
+// "还没有用户"并分别创建一个管理员，因此把落库动作拆出来供事务复用。
+func (c *Container) registerOn(
+	ctx context.Context,
+	db *gorm.DB,
+	in RegisterInput,
+	allowAdmin bool,
+) (*model.User, error) {
 	username := strings.TrimSpace(in.Username)
 	if !usernamePattern.MatchString(username) {
 		return nil, apierr.New(apierr.ErrInvalidParam, "用户名需为 3-64 位字母、数字、下划线、点或连字符")
@@ -83,7 +97,7 @@ func (c *Container) Register(ctx context.Context, in RegisterInput, allowAdmin b
 		Status:       constant.StatusEnabled,
 	}
 
-	err = c.DB.WithContext(ctx).Create(user).Error
+	err = db.WithContext(ctx).Create(user).Error
 	if err != nil {
 		if isUniqueViolation(err) {
 			// 直接给出可读提示（detail 只进日志，客户端只看到 message）
@@ -148,6 +162,97 @@ func (c *Container) Login(ctx context.Context, in LoginInput) (*LoginResult, err
 		ExpiresIn: int64(c.JWT.TTL().Seconds()),
 		User:      &user,
 	}, nil
+}
+
+// userStateCacheTTL 用户状态缓存时长。
+const userStateCacheTTL = 30 * time.Second
+
+// userSessionState 用于鉴权的用户快照。
+type userSessionState struct {
+	enabled bool
+	role    string
+}
+
+func userStateKey(userID uint) string {
+	return "user:" + strconv.FormatUint(uint64(userID), 10)
+}
+
+// UserSessionState 回查用户当前是否启用与当前角色。
+//
+// 令牌里带的是签发时刻的快照：账号被禁用或角色被调整后，旧令牌在过期前仍然有效。
+// 因此每个请求都要以数据库为准核对一次，用短缓存把库查询摊薄。
+func (c *Container) UserSessionState(ctx context.Context, userID uint) (enabled bool, role string, ok bool) {
+	if userID == 0 {
+		return false, "", false
+	}
+	key := userStateKey(userID)
+	if c.UserCache != nil {
+		if v, hit := c.UserCache.Get(key); hit {
+			if st, is := v.(userSessionState); is {
+				return st.enabled, st.role, true
+			}
+		}
+	}
+	var u model.User
+	if err := c.DB.WithContext(ctx).Select("status", "role").First(&u, userID).Error; err != nil {
+		return false, "", false
+	}
+	st := userSessionState{enabled: u.Status == constant.StatusEnabled, role: u.Role}
+	if c.UserCache != nil {
+		c.UserCache.SetWithTTL(key, st, userStateCacheTTL)
+	}
+	return st.enabled, st.role, true
+}
+
+// InvalidateUserCache 让用户状态缓存立即失效（启停账号、改角色后调用）。
+func (c *Container) InvalidateUserCache(userID uint) {
+	if c.UserCache != nil {
+		c.UserCache.Delete(userStateKey(userID))
+	}
+}
+
+// RevokeUserTokens 让用户当前持有的全部令牌立即失效。
+//
+// JWT 本身无状态，无法撤回已签发的令牌，因此记录一个"失效时刻"：
+// 签发时间早于该时刻的令牌一律拒绝（见 middleware.JWTAuth）。
+// 登出、改密、禁用账号时调用，使被盗的旧令牌不再可用。
+func (c *Container) RevokeUserTokens(ctx context.Context, userID uint) {
+	if userID == 0 || c.RDB == nil {
+		return
+	}
+	ttl := c.JWT.TTL()
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	// 令牌的 IssuedAt 只精确到秒，这里同样截断到秒：
+	// 否则改密后立刻签发的新令牌会因"签发早于失效时刻"而把自己也判失效。
+	revokedAt := time.Now().Truncate(time.Second)
+	if err := c.RDB.Set(ctx, c.userRevokeKey(userID), revokedAt.UnixNano(), ttl).Err(); err != nil {
+		if c.Logger != nil {
+			c.Logger.Warn("记录令牌失效时刻失败", zap.Uint("user_id", userID), zap.Error(err))
+		}
+	}
+	c.InvalidateUserCache(userID)
+}
+
+// TokensRevokedAt 返回令牌失效时刻；未失效时返回零值与 false。
+func (c *Container) TokensRevokedAt(ctx context.Context, userID uint) (time.Time, bool) {
+	if userID == 0 || c.RDB == nil {
+		return time.Time{}, false
+	}
+	raw, err := c.RDB.Get(ctx, c.userRevokeKey(userID)).Result()
+	if err != nil || raw == "" {
+		return time.Time{}, false
+	}
+	nanos, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(0, nanos), true
+}
+
+func (c *Container) userRevokeKey(userID uint) string {
+	return c.prefix() + ":user:revoke:" + strconv.FormatUint(uint64(userID), 10)
 }
 
 // GetUserByID 按主键查询用户。
@@ -228,6 +333,12 @@ func (c *Container) SetUserStatus(ctx context.Context, id uint, status int) erro
 	}
 	if res.RowsAffected == 0 {
 		return apierr.New(apierr.ErrNotFound, "用户不存在")
+	}
+	// 令牌里带的是签发时刻的快照：不立即失效的话，
+	// 被停用的账号（尤其是管理员）在令牌过期前仍能继续操作。
+	c.InvalidateUserCache(id)
+	if status == constant.StatusDisabled {
+		c.RevokeUserTokens(ctx, id)
 	}
 	go func() {
 		bg, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -58,6 +58,11 @@ func New(opts Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 密钥是部署安全的一部分：沿用示例值或长度不足时直接拒绝启动，
+	// 而不是带着人人可伪造的签名密钥跑起来。
+	if err := cfg.CheckSecrets(); err != nil {
+		return nil, err
+	}
 
 	lg, err := logger.New(cfg.Log)
 	if err != nil {

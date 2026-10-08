@@ -49,6 +49,95 @@ type MCPServerInput struct {
 	AutoExecute *bool             `json:"auto_execute"`
 }
 
+// secretMask 敏感配置回显占位符。
+const secretMask = "***"
+
+// decodeSecretMap 解析敏感键值文本。
+func decodeSecretMap(raw string) map[string]string {
+	if raw == "" {
+		return nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// mcpEnvMap 解密并解析 stdio 环境变量。
+//
+// 环境变量里常放 token 与 API Key，库里存的是密文；
+// 解密失败时按早期版本的明文兼容。
+func (c *Container) mcpEnvMap(s *model.MCPServer) map[string]string {
+	if s == nil {
+		return nil
+	}
+	return decodeSecretMap(c.decryptSetting(s.Env))
+}
+
+// mcpHeaderMap 解密并解析 HTTP 附加请求头（常承载 Authorization）。
+func (c *Container) mcpHeaderMap(s *model.MCPServer) map[string]string {
+	if s == nil {
+		return nil
+	}
+	return decodeSecretMap(c.decryptSetting(s.Headers))
+}
+
+// mergeSecretMap 合并敏感键值后加密落库。
+//
+// 值为占位符时沿用库里已有的明文：管理端表单往往整份提交，
+// 不这样处理的话"只改名称、原样保存"会把真实 token 覆盖成 ***。
+func (c *Container) mergeSecretMap(stored string, in map[string]string) string {
+	current := decodeSecretMap(c.decryptSetting(stored))
+	if current == nil {
+		current = map[string]string{}
+	}
+	for k, v := range in {
+		if v == secretMask {
+			if old, ok := current[k]; ok {
+				current[k] = old
+			} else {
+				delete(current, k)
+			}
+			continue
+		}
+		current[k] = v
+	}
+	data, err := json.Marshal(current)
+	if err != nil {
+		return stored
+	}
+	return c.encryptSetting(string(data))
+}
+
+// MaskMCPServer 返回一份可安全回显给管理端的副本：
+// 环境变量与请求头只保留键名，值统一替换为占位符。
+func (c *Container) MaskMCPServer(s *model.MCPServer) *model.MCPServer {
+	if s == nil {
+		return nil
+	}
+	out := *s
+	out.Env = c.maskSecretMap(s.Env)
+	out.Headers = c.maskSecretMap(s.Headers)
+	return &out
+}
+
+// maskSecretMap 解密后只保留键名，值替换为占位符。
+func (c *Container) maskSecretMap(stored string) string {
+	m := decodeSecretMap(c.decryptSetting(stored))
+	if len(m) == 0 {
+		return "{}"
+	}
+	for k := range m {
+		m[k] = secretMask
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
 // ListMCPServers 列出全部 Server。
 func (c *Container) ListMCPServers(ctx context.Context) ([]model.MCPServer, error) {
 	var list []model.MCPServer
@@ -94,12 +183,12 @@ func (c *Container) CreateMCPServer(ctx context.Context, in MCPServerInput) (*mo
 	}
 	if len(in.Env) > 0 {
 		if data, err := marshalJSON(in.Env); err == nil {
-			s.Env = data
+			s.Env = c.encryptSetting(data)
 		}
 	}
 	if len(in.Headers) > 0 {
 		if data, err := marshalJSON(in.Headers); err == nil {
-			s.Headers = data
+			s.Headers = c.encryptSetting(data)
 		}
 	}
 	if in.Enabled != nil {
@@ -135,17 +224,13 @@ func (c *Container) UpdateMCPServer(ctx context.Context, id uint, in MCPServerIn
 		}
 	}
 	if in.Env != nil {
-		if data, err := marshalJSON(in.Env); err == nil {
-			s.Env = data
-		}
+		s.Env = c.mergeSecretMap(s.Env, in.Env)
 	}
 	if in.URL != "" {
 		s.URL = strings.TrimSpace(in.URL)
 	}
 	if in.Headers != nil {
-		if data, err := marshalJSON(in.Headers); err == nil {
-			s.Headers = data
-		}
+		s.Headers = c.mergeSecretMap(s.Headers, in.Headers)
 	}
 	if in.Enabled != nil {
 		s.Enabled = *in.Enabled
@@ -239,9 +324,9 @@ func (c *Container) dialMCP(ctx context.Context, s *model.MCPServer) (*mcp.Clien
 		if s.URL == "" {
 			return nil, errors.New("HTTP 传输缺少服务地址")
 		}
-		return mcp.NewClient(ctx, s.Name, mcp.NewHTTPTransport(s.URL, s.HeaderMap(), 30*time.Second))
+		return mcp.NewClient(ctx, s.Name, mcp.NewHTTPTransport(s.URL, c.mcpHeaderMap(s), 30*time.Second))
 	}
-	transport, err := mcp.NewStdioTransport(ctx, s.Command, s.ArgList(), s.EnvMap())
+	transport, err := mcp.NewStdioTransport(ctx, s.Command, s.ArgList(), c.mcpEnvMap(s))
 	if err != nil {
 		return nil, err
 	}

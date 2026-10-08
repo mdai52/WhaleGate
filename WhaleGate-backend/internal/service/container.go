@@ -35,9 +35,12 @@ type Container struct {
 	JWT      *jwt.Manager
 	Limiter  *ratelimit.Limiter
 	KeyCache *cache.TTLCache
-	Logs     *CallLogWriter
-	Audits   *AuditWriter
-	OAuth    *oauth.Sessions
+	// UserCache 用户状态短缓存：JWT 是签发时刻的快照，每次请求都要回查一次
+	// 账号是否仍启用、角色是否变化，用短缓存把库查询摊薄。
+	UserCache *cache.TTLCache
+	Logs      *CallLogWriter
+	Audits    *AuditWriter
+	OAuth     *oauth.Sessions
 	// WebAuthn 通行密钥（未启用时为 nil）。
 	WebAuthn *webauthn.WebAuthn
 	scripts  *scripts
@@ -52,14 +55,15 @@ type Container struct {
 // New 创建服务容器。
 func New(cfg *config.Config, db *gorm.DB, rdb *redis.Client, lg *zap.Logger) *Container {
 	c := &Container{
-		DB:       db,
-		RDB:      rdb,
-		Config:   cfg,
-		Logger:   lg,
-		JWT:      jwt.New(cfg.Security.JWTSecret, cfg.Security.JWTIssuer, cfg.Security.JWTTTL),
-		Limiter:  ratelimit.New(rdb, cfg.Redis.KeyPrefix),
-		KeyCache: cache.NewTTLCache(cfg.Security.JWTTTL, 10000),
-		OAuth:    oauth.NewSessions(nil),
+		DB:        db,
+		RDB:       rdb,
+		Config:    cfg,
+		Logger:    lg,
+		JWT:       jwt.New(cfg.Security.JWTSecret, cfg.Security.JWTIssuer, cfg.Security.JWTTTL),
+		Limiter:   ratelimit.New(rdb, cfg.Redis.KeyPrefix),
+		KeyCache:  cache.NewTTLCache(cfg.Security.JWTTTL, 10000),
+		UserCache: cache.NewTTLCache(userStateCacheTTL, 10000),
+		OAuth:     oauth.NewSessions(nil),
 		scripts: &scripts{
 			reserve: redis.NewScript(reserveScript),
 			settle:  redis.NewScript(settleScript),

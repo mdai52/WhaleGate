@@ -53,8 +53,10 @@ services:
       WG_DATABASE_PORT: "5432"
       WG_REDIS_HOST: redis
       WG_REDIS_PORT: "6379"
-      WG_SECURITY_JWT_SECRET: ${JWT_SECRET:-please-change-me}
-      WG_SECURITY_ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      # 两个密钥必须自行生成后传入（openssl rand -hex 32），不要沿用任何默认值。
+      # 留空时服务会拒绝启动，而不是带着公开密钥运行。
+      WG_SECURITY_JWT_SECRET: ${JWT_SECRET:-}
+      WG_SECURITY_ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       WG_WEB_DIST_DIR: /app/WhaleGate-frontend/dist
     ports:
       - "${APP_PORT:-8080}:8080"

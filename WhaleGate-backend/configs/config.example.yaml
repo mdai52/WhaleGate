@@ -69,6 +69,9 @@ redis:
   key_prefix: wg
 
 security:
+  # 以下两个密钥必须替换为自行生成的随机值（openssl rand -hex 32）。
+  # 服务启动时会校验：空值、示例值或长度不足 32 字节都会直接拒绝启动，
+  # 因为沿用公开值等于任何人都能伪造管理员令牌或解出库里的上游密钥。
   jwt_secret: please-change-me-in-production
   jwt_ttl: 24h
   jwt_issuer: whalegate

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -29,7 +30,71 @@ func JWTAuth(jm *whalegatejwt.Manager) gin.HandlerFunc {
 		c.Set(constant.CtxUsername, claims.Username)
 		c.Set(constant.CtxUserRole, claims.Role)
 		c.Set(constant.CtxMustChangePassword, claims.MustChange)
+		// 签发时间留给 RequireActiveUser 判断令牌是否已被登出 / 改密作废。
+		if claims.IssuedAt != nil {
+			c.Set(constant.CtxTokenIssuedAt, claims.IssuedAt.Time)
+		}
 		c.Next()
+	}
+}
+
+// RequireActiveUser 回查账号当前状态，需配合 JWTAuth 使用。
+//
+// 令牌里带的角色与"是否可用"都是签发时刻的快照，光验签不够：
+// 账号被停用、被降权，或用户主动登出 / 改密之后，旧令牌在过期前依然能验签通过。
+// 因此每个请求都要以数据库为准核对一次（带短缓存），
+// 并把签到早于"失效时刻"的令牌判为失效。
+func RequireActiveUser(svc *service.Container) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := currentUserID(c)
+		if userID == 0 {
+			response.AbortCode(c, apierr.ErrUnauthorized, "缺少登录令牌")
+			return
+		}
+		ctx := c.Request.Context()
+
+		enabled, role, ok := svc.UserSessionState(ctx, userID)
+		if !ok {
+			response.AbortCode(c, apierr.ErrUnauthorized, "账号不存在或已被删除")
+			return
+		}
+		if !enabled {
+			response.AbortCode(c, apierr.ErrUserDisabled, "账号已被禁用，请联系管理员")
+			return
+		}
+		// 登出、改密、停用都会记录失效时刻：签发早于该时刻的令牌一律拒绝。
+		if revokedAt, hit := svc.TokensRevokedAt(ctx, userID); hit {
+			issuedAt, ok := c.Get(constant.CtxTokenIssuedAt)
+			iat, _ := issuedAt.(time.Time)
+			if !ok || iat.Before(revokedAt) {
+				response.AbortCode(c, apierr.ErrTokenExpired, "令牌已失效，请重新登录")
+				return
+			}
+		}
+
+		// 角色以数据库为准：避免降权后旧令牌仍带着管理员角色。
+		c.Set(constant.CtxUserRole, role)
+		c.Next()
+	}
+}
+
+// currentUserID 从上下文中读取用户 ID，兼容 uint / int 两种写入形式。
+func currentUserID(c *gin.Context) uint {
+	raw, ok := c.Get(constant.CtxUserID)
+	if !ok {
+		return 0
+	}
+	switch v := raw.(type) {
+	case uint:
+		return v
+	case int:
+		return uint(v)
+	case int64:
+		return uint(v)
+	case float64:
+		return uint(v)
+	default:
+		return 0
 	}
 }
 

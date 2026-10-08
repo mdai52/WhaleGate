@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -419,6 +420,99 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("studio.video_download_timeout", "180s")
 }
 
+// ParseSize 解析 "32MB" / "512KB" / "1GB" 这类容量字符串，非法时返回 false。
+func ParseSize(raw string) (int64, bool) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return 0, false
+	}
+	units := []struct {
+		suffix string
+		mult   int64
+	}{
+		{"KB", 1 << 10},
+		{"MB", 1 << 20},
+		{"GB", 1 << 30},
+		{"K", 1 << 10},
+		{"M", 1 << 20},
+		{"G", 1 << 30},
+		{"B", 1},
+	}
+	for _, u := range units {
+		if !strings.HasSuffix(v, u.suffix) {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(v, u.suffix)), 10, 64)
+		if err != nil || n <= 0 {
+			return 0, false
+		}
+		return n * u.mult, true
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// BodyLimitBytes 返回请求体上限（字节）。
+//
+// 之前 server.body_limit 配了却不生效——路由里写死 8MB，
+// 导致管理员以为放宽了限制，实际上传仍被拒。解析失败时回落到 8MB。
+func (c *Config) BodyLimitBytes() int64 {
+	const fallback = 8 << 20
+	if c == nil || c.Server.BodyLimit == "" {
+		return fallback
+	}
+	n, ok := ParseSize(c.Server.BodyLimit)
+	if !ok || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+// weakSecrets 配置文件与文档中出现的示例值。
+var weakSecrets = map[string]struct{}{
+	"please-change-me-in-production":   {},
+	"please-change-me":                 {},
+	"changeme":                         {},
+	"secret":                           {},
+	"your-secret-key":                  {},
+	"0123456789abcdef0123456789abcdef": {},
+	"abcdef0123456789abcdef0123456789": {},
+}
+
+// CheckSecrets 校验密钥类配置是否可安全上线。
+//
+// 与 Validate 分开：Validate 只管结构合法（示例配置也要能通过），
+// 而"用的是不是公开示例值"属于部署安全，只有真正启动服务时才该拦。
+// 沿用示例值等于把密钥公开——任何人都能自行签发 role=admin 的令牌，
+// 或解出库里的上游密钥。
+func (c *Config) CheckSecrets() error {
+	if err := validateSecret("security.jwt_secret", c.Security.JWTSecret); err != nil {
+		return err
+	}
+	return validateSecret("security.encryption_key", c.Security.EncryptionKey)
+}
+
+// validateSecret 校验密钥类配置：拒绝空值、示例值与过短的取值。
+//
+// HS256 的密钥应当不短于哈希输出长度（32 字节），否则可暴力枚举；
+// 空值与示例值则等于把密钥公开。
+func validateSecret(field, value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return fmt.Errorf("%s 不能为空，请设置为随机字符串", field)
+	}
+	if _, ok := weakSecrets[strings.ToLower(v)]; ok {
+		return fmt.Errorf("%s 仍使用示例值，请替换为随机字符串", field)
+	}
+	if len(v) < 32 {
+		return fmt.Errorf("%s 长度不足 32 字节，当前 %d", field, len(v))
+	}
+	return nil
+}
+
 // Validate 校验必填项与取值合法性。
 func (c *Config) Validate() error {
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
@@ -435,6 +529,7 @@ func (c *Config) Validate() error {
 	if len(c.Security.EncryptionKey) != 32 {
 		return fmt.Errorf("security.encryption_key 必须为 32 字节，当前 %d", len(c.Security.EncryptionKey))
 	}
+
 	// TLS 证书/私钥既可来自配置文件，也可由管理员在后台配置并存入数据库；
 	// 实际可用性在校验证书对时（service.LoadTLSSettings）统一判定，此处不强制文件存在。
 	return nil

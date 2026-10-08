@@ -108,7 +108,8 @@ func (c *Container) LoadTLSSettings(ctx context.Context) {
 					}
 				case model.SettingTLSKey:
 					if v != "" {
-						keyPEM = v
+						// 库里存的是密文；解密失败按历史明文处理。
+						keyPEM = c.decryptSetting(v)
 					}
 				}
 			}
