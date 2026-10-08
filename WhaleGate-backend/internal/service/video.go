@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -177,7 +178,11 @@ func (c *Container) CreateVideoScript(
 		{Role: spec.RoleUser, Content: buildScriptUserPrompt(in)},
 	}
 	request := &spec.UnifiedRequest{Model: in.Model, Messages: messages}
-	if maxTokens := 512 + in.Scenes*220; maxTokens > 0 {
+	// 思考型模型（GLM 等）会把推理 token 也计入 max_tokens，给太小必然截断 JSON
+	if maxTokens := 1024 + in.Scenes*400; maxTokens > 0 {
+		if maxTokens > 8192 {
+			maxTokens = 8192
+		}
 		request.MaxTokens = &maxTokens
 	}
 
@@ -368,26 +373,158 @@ func buildScriptUserPrompt(in VideoScriptInput) string {
 	return sb.String()
 }
 
-// parseScriptPayload 从模型输出里提取 JSON：模型常在外面套 ```json 代码块或前后缀说明。
+// parseScriptPayload 从模型输出里提取分镜 JSON。
+//
+// 各家模型的表现差别很大：有的套 ```json 代码块，有的把推理过程留在正文里
+// （智谱 GLM 等思考模型常见 <think>…</think>），有的输出被 max_tokens 截断。
+// 这里从宽松到严格依次尝试，失败时把原始输出片段带回去，方便判断是哪种情况。
 func parseScriptPayload(text string) (*scriptPayload, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil, fmt.Errorf("模型未返回内容")
 	}
-	if start := strings.Index(trimmed, "{"); start > 0 {
-		trimmed = trimmed[start:]
+	trimmed = stripThinkBlocks(trimmed)
+
+	candidate := extractJSONObject(trimmed)
+	if candidate == "" {
+		return nil, fmt.Errorf("输出中未找到 JSON 对象：%s", outputSnippet(trimmed))
 	}
-	if end := strings.LastIndex(trimmed, "}"); end >= 0 && end < len(trimmed)-1 {
-		trimmed = trimmed[:end+1]
-	}
+
 	payload := &scriptPayload{}
-	if err := json.Unmarshal([]byte(trimmed), payload); err != nil {
-		return nil, fmt.Errorf("无法解析为 JSON")
+	if err := json.Unmarshal([]byte(candidate), payload); err == nil {
+		return checkScenes(payload)
 	}
+	// 常见脏字符：数组与对象末尾的尾随逗号
+	repaired := trailingComma.ReplaceAllString(candidate, "$1")
+	if err := json.Unmarshal([]byte(repaired), payload); err == nil {
+		return checkScenes(payload)
+	}
+	// 输出被截断：补齐缺失的右括号后多数能救回来
+	if salvaged := closeTruncatedJSON(repaired); salvaged != "" {
+		if err := json.Unmarshal([]byte(salvaged), payload); err == nil {
+			return checkScenes(payload)
+		}
+	}
+	return nil, fmt.Errorf("无法解析为 JSON（可能是输出被 max_tokens 截断）：%s", outputSnippet(candidate))
+}
+
+func checkScenes(payload *scriptPayload) (*scriptPayload, error) {
 	if len(payload.Scenes) == 0 {
 		return nil, fmt.Errorf("未包含任何镜头")
 	}
 	return payload, nil
+}
+
+var (
+	thinkBlock    = regexp.MustCompile(`(?s)<think>.*?</think>`)
+	unclosedThink = regexp.MustCompile(`(?s)<think>.*`)
+	// 尾随逗号：{"a":1,} / [1,2,]
+	trailingComma = regexp.MustCompile(`,\s*([}\]])`)
+)
+
+// stripThinkBlocks 去掉思考模型残留在正文里的推理过程。
+func stripThinkBlocks(text string) string {
+	text = thinkBlock.ReplaceAllString(text, "")
+	// 只有开始标记没有结束：整段都是思考过程，直接丢弃
+	if idx := strings.Index(text, "<think>"); idx >= 0 {
+		text = text[:idx]
+	}
+	return strings.TrimSpace(text)
+}
+
+// extractJSONObject 按括号配对截取最外层 JSON 对象，能正确跳过字符串里的括号。
+// 括号不配对（输出被截断）时返回从首个 { 到结尾的片段，交给截断修复兜底。
+func extractJSONObject(text string) string {
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return ""
+	}
+	depth, inString, escaped := 0, false, false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
+	return text[start:]
+}
+
+// closeTruncatedJSON 为被截断的 JSON 补齐缺失的右括号。
+// 用括号栈保证闭合顺序正确（截断常发生在 scenes 数组的某个对象中间）。
+// 只处理括号层级，不猜字段值：能救回"最后一个镜头对象刚好完整"的情况。
+func closeTruncatedJSON(text string) string {
+	var stack []byte
+	inString, escaped := false, false
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, ch)
+		case '}':
+			if n := len(stack); n > 0 && stack[n-1] == '{' {
+				stack = stack[:n-1]
+			}
+		case ']':
+			if n := len(stack); n > 0 && stack[n-1] == '[' {
+				stack = stack[:n-1]
+			}
+		}
+	}
+	// 还停在字符串里说明最后一个值只写了一半，救不回来
+	if len(stack) == 0 || inString {
+		return ""
+	}
+	// 悬空的逗号会让补齐后的 JSON 仍然非法
+	out := strings.TrimRight(text, " \t\r\n,:")
+	// 栈底到栈顶是开括号的出现顺序，闭合要从栈顶往回补，且要换成对应的闭括号
+	for i := len(stack) - 1; i >= 0; i-- {
+		if stack[i] == '[' {
+			out += "]"
+		} else {
+			out += "}"
+		}
+	}
+	return out
+}
+
+// outputSnippet 截取输出片段用于报错，压掉换行避免日志与提示框被撑爆。
+func outputSnippet(text string) string {
+	runes := []rune(strings.Join(strings.Fields(text), " "))
+	const max = 160
+	if len(runes) > max {
+		return string(runes[:max]) + "…"
+	}
+	return string(runes)
 }
 
 // normalizeScenes 补齐缺失字段，并对超出总时长的镜头做等比收敛。
