@@ -345,7 +345,6 @@ load()
   margin-bottom: 2px;
 }
 
-<style scoped>
 .wg-muted {
   color: rgba(0, 0, 0, 0.45);
 }

@@ -49,10 +49,14 @@ export const accountApi = {
       data: { session_id: sessionId, credential, name },
     })
   },
-  /** GitHub 授权地址 */
+  /**
+   * GitHub 授权地址。
+   * 登录模式必须走免鉴权的 /auth 入口，否则未登录用户第一次点击就会收到 401；
+   * 绑定模式需要登录态，仍走 /account 入口。
+   */
   githubAuthorize(mode: 'bind' | 'login' = 'bind') {
     return request<{ authorize_url: string }>({
-      url: '/account/github/authorize',
+      url: mode === 'login' ? '/auth/github/authorize' : '/account/github/authorize',
       method: 'GET',
       params: { mode },
     })

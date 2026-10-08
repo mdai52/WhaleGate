@@ -72,23 +72,36 @@ async function start(provider: OAuthProvider) {
   }
 }
 
+/** 设备码流程最多轮询 10 分钟，避免用户迟迟不授权时无限请求 */
+const maxPollAttempts = 120
+
 function startPolling(provider: OAuthProvider) {
   stopPolling()
   if (provider.flow !== 'device_code') {
     return
   }
   polling.value = true
+  let attempts = 0
   timer = setInterval(async () => {
     if (!active.value) {
       stopPolling()
       return
     }
+    if (++attempts > maxPollAttempts) {
+      stopPolling()
+      message.warning('授权等待超时，请重新发起')
+      return
+    }
     try {
       const res = await oauthApi.poll(provider.id, active.value.state, activeName.value)
+      // 用户尚未完成授权时后端返回 202 + { pending: true }。
+      // 不判断的话第一次轮询就会被当成授权成功，实际并没有生成凭证。
+      if (res && 'pending' in res && res.pending) {
+        return
+      }
       stopPolling()
       message.success('授权成功，凭证已保存，可在「认证文件」中查看并绑定到渠道')
       modalOpen.value = false
-      void res
     } catch {
       /* 仍在等待授权，继续轮询 */
     }

@@ -153,6 +153,15 @@ const router = createRouter({
 // 系统是否已完成初始化；未初始化时所有页面跳转到安装向导
 let initialized: boolean | null = null
 
+/**
+ * 安装向导创建管理员后必须立刻更新这个标记。
+ * 否则守卫仍然认为系统未初始化，点击"去添加渠道"会被反复弹回 /install，
+ * 只能刷新浏览器重新拉取状态才能离开安装页。
+ */
+export function setInitialized(value: boolean) {
+  initialized = value
+}
+
 router.beforeEach(async (to) => {
   document.title = to.meta.title ? `鲸闸 · ${to.meta.title}` : '鲸闸 WhaleGate'
 

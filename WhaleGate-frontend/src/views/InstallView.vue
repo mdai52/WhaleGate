@@ -5,6 +5,7 @@ import { CheckCircleOutlined, RocketOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { systemApi } from '@/api/system'
 import { useUserStore } from '@/stores/user'
+import { setInitialized } from '@/router'
 import logoMark from '@/assets/logo-mark.png'
 
 const router = useRouter()
@@ -71,6 +72,8 @@ async function submit() {
     })
     userStore.token = res.token
     localStorage.setItem('wg_token', res.token)
+    // 通知路由守卫系统已完成初始化，否则后续导航会被弹回安装页
+    setInitialized(true)
     done.value = true
     message.success('初始化完成，已自动登录')
     await userStore.fetchProfile()
