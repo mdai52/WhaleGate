@@ -71,10 +71,10 @@ const menus = computed<MenuItem[]>(() => {
       { key: '/admin/logs', label: '全局日志', icon: 'FileSearchOutlined', group: '管理后台' },
       { key: '/admin/audit-logs', label: '安全审计', icon: 'SafetyOutlined', group: '管理后台' },
       { key: '/admin/settings', label: '系统设置', icon: 'SettingOutlined', group: '管理后台' },
-      { key: '/admin/mcp', label: 'MCP 服务', icon: 'DeploymentUnitOutlined', group: '工具' },
-      { key: '/admin/skills', label: '技能管理', icon: 'BulbOutlined', group: '工具' },
-      { key: '/admin/oauth', label: 'OAuth 登录', icon: 'SafetyCertificateOutlined', group: '凭证' },
-      { key: '/admin/credentials', label: '认证文件', icon: 'IdcardOutlined', group: '凭证' },
+      { key: '/admin/mcp', label: 'MCP 服务', icon: 'DeploymentUnitOutlined', group: '工具与凭证' },
+      { key: '/admin/skills', label: '技能管理', icon: 'BulbOutlined', group: '工具与凭证' },
+      { key: '/admin/oauth', label: 'OAuth 登录', icon: 'SafetyCertificateOutlined', group: '工具与凭证' },
+      { key: '/admin/credentials', label: '认证文件', icon: 'IdcardOutlined', group: '工具与凭证' },
     )
   }
   return list
@@ -226,6 +226,45 @@ function confirmLogout() {
 <style scoped>
 .wg-layout {
   min-height: 100vh;
+}
+
+/* ---- 侧边栏视觉 ----
+   分组标题默认与菜单项同级大小，19 个菜单项切 4 组时视觉很散；
+   收小标题、给菜单项做圆角与选中态，层次才出得来。 */
+
+.wg-layout :deep(.ant-menu-light.ant-menu-root) {
+  padding: 4px 10px 16px;
+}
+
+.wg-layout :deep(.ant-menu-item-group-title) {
+  padding: 14px 10px 6px;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  color: rgba(0, 0, 0, 0.36);
+}
+
+.wg-layout :deep(.ant-menu-item) {
+  border-radius: 8px;
+  height: 38px;
+  line-height: 38px;
+}
+
+.wg-layout :deep(.ant-menu-item .anticon) {
+  font-size: 15px;
+}
+
+.wg-layout :deep(.ant-menu-item-selected) {
+  font-weight: 600;
+}
+
+/* 折叠后分组标题没有意义，退化成分隔线 */
+.wg-layout :deep(.ant-menu-inline-collapsed .ant-menu-item-group-title) {
+  height: 1px;
+  margin: 8px 10px;
+  padding: 0;
+  overflow: hidden;
+  background: #f0f0f0;
 }
 
 .wg-logo {
