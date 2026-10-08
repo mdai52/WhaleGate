@@ -17,27 +17,38 @@ type Upstream struct {
 	Client *http.Client
 }
 
+// sharedTransport 进程内共享的连接池。
+//
+// 之前每次请求都 new 一个 Transport：连接池里永远只有一条连接，
+// MaxIdleConns 之类的调优完全失效，请求结束后连接与其读协程还要存活到 IdleConnTimeout，
+// QPS 一上去就是 socket 与 goroutine 的持续放大。
+var sharedTransport = &http.Transport{
+	MaxIdleConns:        512,
+	MaxIdleConnsPerHost: 64,
+	MaxConnsPerHost:     256,
+	IdleConnTimeout:     90 * time.Second,
+	DisableCompression:  true,
+	ForceAttemptHTTP2:   true,
+}
+
 // NewUpstream 创建上游调用器。
+//
+// Client 本身很轻，按请求创建没有问题；真正需要复用的是 Transport，这里统一用共享实例。
 func NewUpstream(timeout time.Duration) *Upstream {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
 	return &Upstream{Client: &http.Client{
 		Timeout:   timeout,
-		Transport: DefaultTransport(),
+		Transport: sharedTransport,
 	}}
 }
 
-// DefaultTransport 返回针对网关场景调优的连接池配置。
+// DefaultTransport 返回全局共享的连接池配置。
+//
+// 保留此函数仅为兼容既有调用：返回值就是共享实例，调用方不应修改它。
 func DefaultTransport() *http.Transport {
-	return &http.Transport{
-		MaxIdleConns:        512,
-		MaxIdleConnsPerHost: 64,
-		MaxConnsPerHost:     256,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  true,
-		ForceAttemptHTTP2:   true,
-	}
+	return sharedTransport
 }
 
 // Do 发起一次性请求并返回原始响应，调用方负责关闭 Body。
@@ -83,6 +94,12 @@ func (u *Upstream) DoStream(ctx context.Context, method, url string, headers map
 	return resp, nil
 }
 
+// maxSSEEventSize 单个 SSE 事件的最大载荷（1MB）。
+//
+// 事件以空行结束，上游若不发空行，缓冲区会无上限增长；
+// 流式请求是直接读上游响应体的，必须自己设上限（非流式路径都有 io.LimitReader 兜底）。
+const maxSSEEventSize = 1 << 20
+
 // SSEScanner 逐事件读取 SSE 流，兼容 \n\n 与 \r\n\r\n 两种分隔。
 type SSEScanner struct {
 	reader *bufio.Reader
@@ -120,6 +137,9 @@ func (s *SSEScanner) Next() ([]byte, error) {
 				s.buf.WriteByte('\n')
 			}
 			s.buf.Write(payload)
+			if s.buf.Len() > maxSSEEventSize {
+				return nil, fmt.Errorf("SSE 单事件超过 %d 字节，已中断读取", maxSSEEventSize)
+			}
 		}
 
 		if err != nil {
