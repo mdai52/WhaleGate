@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -29,9 +28,9 @@ func NewImageHandler(svc *service.Container) *ImageHandler {
 // 成功后按实际出图张数结算，失败全额回补。计费在 service.GenerateImage
 // 内完成，工作台入口与之共用一份口径。
 func (h *ImageHandler) Generations(c *gin.Context) {
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRequestBody))
+	body, err := readRequestBody(c, h.svc)
 	if err != nil {
-		writeRelayError(c, gateway.ProtocolOpenAI, apierr.Wrap(apierr.ErrBadRequest, err))
+		writeRelayError(c, gateway.ProtocolOpenAI, err)
 		return
 	}
 	if len(body) == 0 {

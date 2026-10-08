@@ -175,6 +175,15 @@ func (c *Container) Close() error {
 	return nil
 }
 
+// BodyLimitBytes 返回请求体上限（字节）。与路由层 body_limit 中间件同一来源，
+// 避免"中间件放行、处理器又按写死值截断"这种不一致。
+func (c *Container) BodyLimitBytes() int64 {
+	if c == nil || c.Config == nil {
+		return 8 << 20
+	}
+	return c.Config.BodyLimitBytes()
+}
+
 // prefix 返回 Redis 键前缀。
 func (c *Container) prefix() string {
 	if c.Config == nil || c.Config.Redis.KeyPrefix == "" {

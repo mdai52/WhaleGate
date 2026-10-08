@@ -35,8 +35,12 @@ func NewEmbeddingsHandler(svc *service.Container) *EmbeddingsHandler {
 
 // Embeddings 转发向量生成请求。
 func (h *EmbeddingsHandler) Embeddings(c *gin.Context) {
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRequestBody))
-	if err != nil || len(body) == 0 {
+	body, err := readRequestBody(c, h.svc)
+	if err != nil {
+		writeRelayError(c, gateway.ProtocolOpenAI, err)
+		return
+	}
+	if len(body) == 0 {
 		writeRelayError(c, gateway.ProtocolOpenAI, apierr.New(apierr.ErrBadRequest, "请求体不能为空"))
 		return
 	}

@@ -31,11 +31,25 @@ func NewRelayHandler(svc *service.Container) *RelayHandler {
 	return &RelayHandler{svc: svc}
 }
 
-// maxRequestBody 最大请求体（8MB），避免超大 payload 打爆内存。
-const maxRequestBody = 8 << 20
-
 // maxResponseBody 非流式响应最大读取量（32MB）。
 const maxResponseBody = 32 << 20
+
+// readRequestBody 按 server.body_limit 读取请求体。
+//
+// 上限必须取自配置：写死 8MB 时，管理员把 body_limit 放宽到 32MB 之后
+// 请求会先通过中间件、再被这里截断，得到一个被切坏的 JSON 与一句看不懂的解析错误。
+func readRequestBody(c *gin.Context, svc *service.Container) ([]byte, error) {
+	limit := svc.BodyLimitBytes()
+	// 多读 1 字节用于识别"恰好超限"，否则无法区分刚好等于上限与超限。
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, limit+1))
+	if err != nil {
+		return nil, apierr.Wrap(apierr.ErrBadRequest, err)
+	}
+	if int64(len(body)) > limit {
+		return nil, apierr.Errorf(apierr.ErrBadRequest, "请求体超过 %d 字节上限", limit)
+	}
+	return body, nil
+}
 
 // ListModels 汇总所有启用渠道支持的模型，以 OpenAI 格式返回。
 func (h *RelayHandler) ListModels(c *gin.Context) {
@@ -114,9 +128,9 @@ func parseGeminiPath(path string) (modelName, action string) {
 
 // relay 完成一次请求转发：解析 -> 选路 -> 转发（含重试）-> 回写。
 func (h *RelayHandler) relay(c *gin.Context, clientProtocol string, pathModel string, forceStream bool) {
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRequestBody))
+	body, err := readRequestBody(c, h.svc)
 	if err != nil {
-		writeRelayError(c, clientProtocol, apierr.Wrap(apierr.ErrBadRequest, err))
+		writeRelayError(c, clientProtocol, err)
 		return
 	}
 	if len(body) == 0 {

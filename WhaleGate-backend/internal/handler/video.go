@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"io"
 	"net/http"
 	"strconv"
 
@@ -193,8 +192,12 @@ func NewVideoAPIHandler(svc *service.Container) *VideoAPIHandler {
 // 返回体对齐 Sora 风格：{id, object: "video", status, model}，
 // id 为作品 ID，后续轮询与取内容都用它。
 func (h *VideoAPIHandler) Create(c *gin.Context) {
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRequestBody))
-	if err != nil || len(body) == 0 {
+	body, err := readRequestBody(c, h.svc)
+	if err != nil {
+		writeRelayError(c, gateway.ProtocolOpenAI, err)
+		return
+	}
+	if len(body) == 0 {
 		writeRelayError(c, gateway.ProtocolOpenAI, apierr.New(apierr.ErrBadRequest, "请求体不能为空"))
 		return
 	}
