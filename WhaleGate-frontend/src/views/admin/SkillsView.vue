@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { CopyOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { skillApi } from '@/api/skill'
 import type { Skill } from '@/api/types'
@@ -14,6 +14,40 @@ const scanDir = ref('')
 
 const detailOpen = ref(false)
 const detail = ref<Skill | null>(null)
+
+/** 本页统计：列表是分页的，标签里写明「本页」避免被当成全量 */
+const enabledOnPage = computed(() => items.value.filter((s) => s.enabled).length)
+const alwaysOnPage = computed(() => items.value.filter((s) => s.mode === 'always').length)
+
+/** 空状态下的接入步骤 */
+const guideSteps = [
+  { title: '建技能目录', desc: '每个技能一个子目录，目录内含 SKILL.md' },
+  { title: '用 frontmatter 声明', desc: '写 name / description / mode，可不写走默认值' },
+  { title: '扫描导入并选择模式', desc: '点「扫描导入」，再按长度决定全文注入或仅索引' },
+]
+
+const skillExample = `---
+name: code-review
+description: 按项目规范做代码评审，输出问题清单与修改建议
+mode: index
+---
+
+# 代码评审
+
+评审时按以下顺序检查，输出按严重程度排序：
+1. 边界条件与错误处理是否完整
+2. 是否存在并发或资源泄漏风险
+3. 命名与项目既有约定是否一致
+`
+
+async function copyExample() {
+  try {
+    await navigator.clipboard.writeText(skillExample)
+    message.success('示例已复制，保存为 SKILL.md 即可扫描导入')
+  } catch {
+    message.error('复制失败，请手动选中复制')
+  }
+}
 
 async function load() {
   loading.value = true
@@ -98,7 +132,13 @@ onMounted(load)
       <div class="wg-card-title" style="margin-bottom: 16px">
         <div>
           <h2 style="margin: 0">技能管理</h2>
-          <div class="wg-muted" style="margin-top: 4px">共 {{ pagination.total }} 个技能</div>
+          <div class="wg-stats">
+            <div class="wg-stat"><b>{{ pagination.total }}</b><span>技能</span></div>
+            <template v-if="items.length">
+              <div class="wg-stat"><b>{{ enabledOnPage }}</b><span>本页启用</span></div>
+              <div class="wg-stat"><b>{{ alwaysOnPage }}</b><span>本页全文注入</span></div>
+            </template>
+          </div>
         </div>
         <a-button type="primary" :loading="scanning" @click="scan">
           <ReloadOutlined />
@@ -106,20 +146,68 @@ onMounted(load)
         </a-button>
       </div>
 
-      <a-alert
-        type="info"
-        show-icon
-        style="margin-bottom: 16px"
-        message="SKILL.md 格式"
-        description="每个技能一个目录，内含 SKILL.md；可用 frontmatter 声明 name / description / mode。mode=always 把正文全量注入 system 提示词，mode=index 只注入名称与描述索引。"
-      />
+      <!-- 目录结构与 frontmatter 用并列卡片，比一段说明更容易照着做 -->
+      <div class="wg-modes">
+        <div class="wg-mode">
+          <div class="wg-mode-head">目录结构</div>
+          <pre class="wg-tree">skills/
+├─ code-review/
+│  └─ SKILL.md
+└─ data-analysis/
+   └─ SKILL.md</pre>
+          <div class="wg-mode-foot">每个技能一个子目录，目录内含 SKILL.md</div>
+        </div>
+        <div class="wg-mode">
+          <div class="wg-mode-head">SKILL.md frontmatter</div>
+          <ul class="wg-fields">
+            <li><code>name</code> 技能名，不写则取目录名</li>
+            <li><code>description</code> 一句话说明，仅索引模式下注入</li>
+            <li><code>mode</code> <b>always</b> 全文注入 / <b>index</b> 仅索引</li>
+          </ul>
+          <div class="wg-mode-foot">长技能用 index，省上下文；短指令用 always</div>
+        </div>
+      </div>
 
       <a-space style="margin-bottom: 16px" wrap>
         <a-input-search v-model:value="keyword" placeholder="搜索技能" allow-clear style="width: 220px" @search="load" />
         <a-input v-model:value="scanDir" placeholder="扫描目录（留空用配置值 skills）" allow-clear style="width: 260px" />
       </a-space>
 
+      <!-- 完全没有技能时给一条可照着走的路径；搜索无结果时不占用这里 -->
+      <div v-if="!keyword.trim() && pagination.total === 0 && !loading" class="wg-guide">
+        <div class="wg-guide-steps">
+          <div v-for="(s, i) in guideSteps" :key="i" class="wg-guide-step">
+            <div class="wg-guide-no">{{ i + 1 }}</div>
+            <div>
+              <div class="wg-guide-title">{{ s.title }}</div>
+              <div class="wg-muted">{{ s.desc }}</div>
+            </div>
+          </div>
+        </div>
+
+        <a-divider class="wg-guide-divider">
+          <span class="wg-muted">SKILL.md 示例</span>
+        </a-divider>
+
+        <div class="wg-example">
+          <pre class="wg-example-body">{{ skillExample }}</pre>
+          <a-button size="small" @click="copyExample">
+            <CopyOutlined />
+            复制示例
+          </a-button>
+        </div>
+
+        <div class="wg-guide-foot">
+          <a-button type="primary" :loading="scanning" @click="scan">
+            <ReloadOutlined />
+            扫描导入
+          </a-button>
+          <span class="wg-muted">目录可在上方「扫描目录」指定，留空用配置里的 skills.dir</span>
+        </div>
+      </div>
+
       <a-table
+        v-else
         :columns="[
           { title: '名称', dataIndex: 'name', key: 'name' },
           { title: '描述', dataIndex: 'description', key: 'description' },
@@ -202,6 +290,117 @@ onMounted(load)
 </template>
 
 <style scoped>
+.wg-stats {
+  display: flex;
+  gap: 20px;
+  margin-top: 8px;
+}
+.wg-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.wg-stat b {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--wg-primary, #1677ff);
+}
+.wg-stat span {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.wg-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.wg-mode {
+  padding: 12px 16px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fafafa;
+}
+.wg-mode-head {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.wg-mode-foot {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+.wg-tree {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.wg-fields {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.wg-fields li {
+  margin-bottom: 4px;
+}
+
+.wg-guide {
+  padding: 24px 8px 8px;
+}
+.wg-guide-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+.wg-guide-step {
+  display: flex;
+  gap: 10px;
+}
+.wg-guide-no {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--wg-primary, #1677ff);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wg-guide-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.wg-guide-divider {
+  margin: 24px 0 16px;
+}
+.wg-example {
+  max-width: 620px;
+  margin: 0 auto;
+  text-align: right;
+}
+.wg-example-body {
+  text-align: left;
+  margin: 0 0 10px;
+  padding: 12px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.wg-guide-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
 .wg-clamp {
   display: inline-block;
   max-width: 320px;
