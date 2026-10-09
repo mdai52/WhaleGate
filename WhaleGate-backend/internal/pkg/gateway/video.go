@@ -48,6 +48,28 @@ func IsVideoModel(id string) bool {
 
 // ---------------------------------------------------------------- 端点
 
+// 视频端点风格：视频生成没有统一标准，各家的路径与字段都不一样。
+const (
+	videoStyleOpenAI = "openai"
+	videoStyleZhipu  = "zhipu"
+)
+
+// videoEndpointStyle 按上游地址判断视频端点风格。
+//
+// 渠道协议（openai / gemini / anthropic）描述的是聊天协议，无法据此区分视频端点：
+// 智谱的聊天是 OpenAI 兼容的，视频却是另一套。因此按上游地址识别——
+// 新增平台时在这里加一条即可。
+//
+//	Sora 风格：POST /videos，GET /videos/{id}，内容走 /videos/{id}/content
+//	智谱风格：POST /videos/generations，GET /async-result/{id}，结果直接返回视频 URL
+func videoEndpointStyle(baseURL string) string {
+	host := strings.ToLower(baseURL)
+	if strings.Contains(host, "bigmodel.cn") {
+		return videoStyleZhipu
+	}
+	return videoStyleOpenAI
+}
+
 // BuildVideoSubmitURL 提交生成的端点。
 func BuildVideoSubmitURL(channelType, baseURL string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
@@ -56,6 +78,9 @@ func BuildVideoSubmitURL(channelType, baseURL string) (string, error) {
 	}
 	if !SupportsVideoGeneration(channelType) {
 		return "", fmt.Errorf("渠道协议 %s 不支持视频生成", channelType)
+	}
+	if videoEndpointStyle(baseURL) == videoStyleZhipu {
+		return base + "/videos/generations", nil
 	}
 	return base + "/videos", nil
 }
@@ -72,11 +97,19 @@ func BuildVideoStatusURL(channelType, baseURL, taskID string) (string, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return "", fmt.Errorf("缺少上游任务 ID")
 	}
+	if videoEndpointStyle(baseURL) == videoStyleZhipu {
+		return base + "/async-result/" + taskID, nil
+	}
 	return base + "/videos/" + taskID, nil
 }
 
 // BuildVideoContentURL 拉取生成内容的端点。
 func BuildVideoContentURL(channelType, baseURL, taskID string) (string, error) {
+	if videoEndpointStyle(baseURL) == videoStyleZhipu {
+		// 智谱没有独立的内容端点：结果随任务状态一起返回视频 URL，
+		// 走到这里说明上游既没给 URL 也没给内容，只能报错。
+		return "", fmt.Errorf("该上游不在任务响应里返回内容，也没有独立的内容端点")
+	}
 	url, err := BuildVideoStatusURL(channelType, baseURL, taskID)
 	if err != nil {
 		return "", err
@@ -182,10 +215,12 @@ func ParseVideoStatusResponse(channelType string, raw []byte) (*spec.VideoRespon
 // 这里对常见同义字段做兼容。
 func parseOpenAIVideoTask(raw []byte) (*spec.VideoResponse, error) {
 	var resp struct {
-		ID       string `json:"id"`
-		Object   string `json:"object"`
-		Status   string `json:"status"`
-		Progress int    `json:"progress"`
+		ID     string `json:"id"`
+		Object string `json:"object"`
+		Status string `json:"status"`
+		// 智谱用 task_status 表达任务状态（PROCESSING / SUCCESS / FAIL），没有 status 字段
+		TaskStatus string `json:"task_status"`
+		Progress   int    `json:"progress"`
 		// Sora 允许把 seconds 写成字符串（"4"/"8"），也可能是数字，
 		// 因此用 json.Number 承接再统一转换，避免直接解析成 int 报错。
 		Seconds json.Number `json:"seconds"`
@@ -200,7 +235,12 @@ func parseOpenAIVideoTask(raw []byte) (*spec.VideoResponse, error) {
 		VideoURL    string `json:"video_url"`
 		DownloadURL string `json:"download_url"`
 		B64JSON     string `json:"b64_json"`
-		Data        []struct {
+		// 智谱把生成结果放在 video_result 数组里，随任务状态一起返回
+		VideoResult []struct {
+			URL           string `json:"url"`
+			CoverImageURL string `json:"cover_image_url"`
+		} `json:"video_result"`
+		Data []struct {
 			URL       string `json:"url"`
 			B64JSON   string `json:"b64_json"`
 			MimeType  string `json:"mime_type"`
@@ -215,7 +255,7 @@ func parseOpenAIVideoTask(raw []byte) (*spec.VideoResponse, error) {
 
 	out := &spec.VideoResponse{
 		TaskID:   firstVideoID(resp.ID, resp.Object),
-		Status:   normalizeVideoStatus(resp.Status),
+		Status:   normalizeVideoStatus(firstVideoStatus(resp.Status, resp.TaskStatus)),
 		Progress: resp.Progress,
 		Seconds:  firstNonZero(secondsValue(resp.Seconds), parseIntOrZero(resp.SecondsText)),
 	}
@@ -233,6 +273,15 @@ func parseOpenAIVideoTask(raw []byte) (*spec.VideoResponse, error) {
 		out.Videos = append(out.Videos, spec.Video{Type: "inline_data", B64Data: resp.B64JSON, MimeType: "video/mp4", DurationSec: out.Seconds})
 	} else if url := firstVideoURL(resp.URL, resp.VideoURL, resp.DownloadURL); url != "" {
 		out.Videos = append(out.Videos, spec.Video{Type: "url", URL: url, MimeType: "video/mp4", DurationSec: out.Seconds})
+	}
+	// 智谱：结果随任务状态一起返回，不需要再调内容端点。
+	for _, item := range resp.VideoResult {
+		if item.URL == "" {
+			continue
+		}
+		out.Videos = append(out.Videos, spec.Video{
+			Type: "url", URL: item.URL, MimeType: "video/mp4", DurationSec: out.Seconds,
+		})
 	}
 	for _, item := range resp.Data {
 		video := spec.Video{
@@ -266,7 +315,7 @@ func normalizeVideoStatus(status string) string {
 		return spec.VideoStatusProcessing
 	case "completed", "complete", "succeeded", "success", "done", "finished":
 		return spec.VideoStatusSucceeded
-	case "failed", "error", "cancelled", "canceled", "failed_permanent":
+	case "failed", "fail", "error", "cancelled", "canceled", "failed_permanent":
 		return spec.VideoStatusFailed
 	default:
 		return ""
@@ -380,6 +429,16 @@ func VideoCreatedAt() int64 { return time.Now().Unix() }
 func firstVideoID(values ...string) string {
 	for _, v := range values {
 		if v != "" && v != "video" && v != "list" {
+			return v
+		}
+	}
+	return ""
+}
+
+// firstVideoStatus 取第一个非空状态：不同平台分别用 status 与 task_status。
+func firstVideoStatus(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
 			return v
 		}
 	}
