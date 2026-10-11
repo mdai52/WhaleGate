@@ -15,6 +15,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 	"github.com/whalegate/whalegate/internal/pkg/util"
 )
 
@@ -51,28 +52,6 @@ type ImageGenerateInput struct {
 	GroupMultiplier float64
 	// Meta 调用日志需要的请求上下文与计费主体；为 nil 时无法计费也无法归因来源。
 	Meta *ImageCallMeta
-}
-
-// ImageCallMeta 一次图片生成的可观测上下文，由调用方从 HTTP 上下文中提取。
-type ImageCallMeta struct {
-	// UserID 归属用户。
-	UserID uint
-	// APIKeyID 通过 API Key 调用时为密钥 ID，工作台调用为 0。
-	APIKeyID uint
-	// TraceID 链路追踪 ID。
-	TraceID string
-	// ClientIP 客户端真实 IP。
-	ClientIP string
-	// RequestScheme 入站协议：http / https。
-	RequestScheme string
-}
-
-// KeyID 取密钥 ID；Meta 缺失时返回 0。
-func (m *ImageCallMeta) KeyID() uint {
-	if m == nil {
-		return 0
-	}
-	return m.APIKeyID
 }
 
 // ImageGeneration 一次图片生成的结果。
@@ -414,19 +393,19 @@ func (c *Container) callImageUpstream(
 		if err != nil {
 			return attempt, 0, apierr.Wrap(apierr.ErrInvalidParam, err)
 		}
-		url = gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, false)
+		url = gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, false, vendor.FromBaseURL(channel.BaseURL))
 		parse = gateway.ParseImageChatResponse
 	default:
-		payload, err = gateway.BuildImageRequest(channel.Type, in.toSpec(), upstreamModel)
+		payload, err = gateway.BuildImageRequest(channel.Type, in.toSpec(), upstreamModel, vendor.FromBaseURL(channel.BaseURL))
 		if err != nil {
 			return attempt, 0, apierr.Wrap(apierr.ErrInvalidParam, err)
 		}
-		url, err = gateway.BuildImageUpstreamURL(channel.Type, channel.BaseURL, upstreamModel)
+		url, err = gateway.BuildImageUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, vendor.FromBaseURL(channel.BaseURL))
 		if err != nil {
 			return attempt, 0, apierr.Wrap(apierr.ErrInvalidParam, err)
 		}
 		parse = func(raw []byte) (*spec.ImageResponse, error) {
-			return gateway.ParseImageResponse(channel.Type, raw)
+			return gateway.ParseImageResponse(channel.Type, raw, vendor.FromBaseURL(channel.BaseURL))
 		}
 	}
 
@@ -440,7 +419,8 @@ func (c *Container) callImageUpstream(
 	}
 
 	upstream := gateway.NewUpstream(c.upstreamTimeout(channel))
-	resp, err := upstream.Do(ctx, http.MethodPost, url, gateway.BuildUpstreamHeaders(channel.Type, apiKey), body)
+	resp, err := upstream.Do(ctx, http.MethodPost, url,
+		gateway.BuildUpstreamHeaders(channel.Type, apiKey, vendor.FromBaseURL(channel.BaseURL)), body)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return attempt, 0, apierr.Wrap(apierr.ErrUpstreamTimeout, err)
@@ -454,7 +434,7 @@ func (c *Container) callImageUpstream(
 		return attempt, resp.StatusCode, apierr.Wrap(apierr.ErrUpstream, err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		msg := gateway.ExtractUpstreamError(channel.Type, raw)
+		msg := gateway.ExtractUpstreamError(channel.Type, raw, vendor.FromBaseURL(channel.BaseURL))
 		if msg == "" {
 			msg = strings.TrimSpace(string(raw))
 		}

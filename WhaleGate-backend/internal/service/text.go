@@ -17,6 +17,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 	"github.com/whalegate/whalegate/internal/pkg/util"
 )
 
@@ -164,7 +165,9 @@ func (c *Container) completeTextOnce(
 	upstreamReq := *req
 	upstreamReq.Model = upstreamModel
 
-	payload, err := gateway.BuildUpstreamRequest(channel.Type, &upstreamReq)
+	vendorProfile := vendor.FromBaseURL(channel.BaseURL)
+
+	payload, err := gateway.BuildUpstreamRequest(channel.Type, &upstreamReq, vendorProfile)
 	if err != nil {
 		return nil, apierr.Wrap(apierr.ErrInvalidParam, err)
 	}
@@ -176,9 +179,10 @@ func (c *Container) completeTextOnce(
 		return nil, apierr.Wrap(apierr.ErrInternal, err)
 	}
 
-	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, false)
+	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, false, vendorProfile)
 	upstream := gateway.NewUpstream(c.upstreamTimeout(channel))
-	resp, err := upstream.Do(ctx, http.MethodPost, url, gateway.BuildUpstreamHeaders(channel.Type, apiKey), body)
+	resp, err := upstream.Do(ctx, http.MethodPost, url,
+		gateway.BuildUpstreamHeaders(channel.Type, apiKey, vendorProfile), body)
 	if err != nil {
 		return nil, classifyTextError(err)
 	}
@@ -189,14 +193,14 @@ func (c *Container) completeTextOnce(
 		return nil, apierr.Wrap(apierr.ErrUpstream, err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		msg := gateway.ExtractUpstreamError(channel.Type, raw)
+		msg := gateway.ExtractUpstreamError(channel.Type, raw, vendorProfile)
 		if msg == "" {
 			msg = string(raw)
 		}
 		return nil, upstreamTextHTTPError(resp.StatusCode, msg)
 	}
 
-	unified, err := gateway.ParseUpstreamResponse(channel.Type, raw)
+	unified, err := gateway.ParseUpstreamResponse(channel.Type, raw, vendorProfile)
 	if err != nil {
 		return nil, apierr.Wrap(apierr.ErrUpstreamInvalid, err)
 	}

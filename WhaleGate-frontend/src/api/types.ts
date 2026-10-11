@@ -203,7 +203,8 @@ export interface Paged<T> {
 
 // ---------------------------------------------------------------- 渠道
 
-/** 渠道协议类型：openai 兼容 / gemini 原生 / anthropic 原生 / claude-code 网关 */
+/** 渠道协议类型：支持 OpenAI 协议的上游一律用 openai（差异由厂商档案自动补齐），
+ *  只有报文结构本身不同的上游（Gemini / Anthropic 系）才单列协议。 */
 export type ChannelType = 'openai' | 'gemini' | 'anthropic' | 'claude-code'
 
 /** 渠道状态：1 正常 / 2 人工禁用 / 3 自动熔断 */
@@ -341,6 +342,12 @@ export interface CallLog {
   image_count: number
   /** 视频调用生成的秒数；非视频调用为 0 */
   video_seconds: number
+  /** 画布导出张数；非画布导出为 0 */
+  canvas_count: number
+  /** 画布导出像素数，对应渲染开销 */
+  canvas_pixels: number
+  /** 画布导出文件字节数 */
+  canvas_bytes: number
   latency_ms: number
   first_token_ms: number
   status: CallStatus
@@ -626,4 +633,133 @@ export interface ImageGenerateInput {
   aspect_ratio?: string
   template_id?: number
   extra?: Record<string, unknown>
+}
+
+// ---------------------------------------------------------------- 画布工作台
+
+/** 画布节点类型 */
+export type CanvasNodeType = 'rect' | 'ellipse' | 'line' | 'text' | 'image'
+
+/** 画布上的一个元素；字段是各类型的并集，不用的留空即可 */
+export interface CanvasNode {
+  id: string
+  type: CanvasNodeType
+  x: number
+  y: number
+  w?: number
+  h?: number
+  radius?: number
+  rotation?: number
+  hidden?: boolean
+  /** 0-1；不填表示不透明 */
+  opacity?: number
+  fill?: string
+  stroke?: string
+  stroke_width?: number
+  /** 折线顶点，仅 line */
+  points?: { x: number; y: number }[]
+  /** 文本内容，仅 text */
+  text?: string
+  font_size?: number
+  color?: string
+  line_height?: number
+  /** 内嵌图片 data URI，仅 image */
+  src?: string
+}
+
+/** 画布内容 */
+export interface CanvasPayload {
+  nodes: CanvasNode[]
+  width?: number
+  height?: number
+  background?: string
+}
+
+/** 画布记录 */
+export interface CanvasRecord {
+  id: number
+  name: string
+  width: number
+  height: number
+  background: string
+  version: number
+  payload: CanvasPayload
+  created_at?: string
+  updated_at?: string
+}
+
+/** 导出任务：0 排队 / 1 渲染中 / 2 成功 / 3 失败 */
+export interface CanvasExport {
+  id: number
+  canvas_id: number
+  format: string
+  scale: number
+  status: number
+  progress: number
+  width: number
+  height: number
+  bytes: number
+  latency_ms: number
+  queued_at?: string
+  url?: string
+  error_message?: string
+}
+
+// ---------------------------------------------------------------- 厂商适配档案
+
+/** 厂商档案详情（vendor.Vendor 的 TS 映射） */
+export interface VendorConfig {
+  id?: string
+  name?: string
+  group?: string
+  hosts?: string[]
+  model_hints?: string[]
+  base_url?: string
+  protocol?: string
+  auth_header?: string
+  auth_style?: string
+  query?: string
+  extra_headers?: Record<string, string>
+  stream_headers?: Record<string, string>
+  chat_path?: string
+  models_path?: string
+  base_suffix?: string
+  reasoning?: string
+  max_tokens?: string
+  usage?: string
+  response?: string
+  error?: string
+  stream_usage?: boolean
+  thinking_param?: string
+  extra_params?: string[]
+  video?: string
+  image?: string
+  capabilities?: string[]
+  note?: string
+}
+
+/** 厂商档案行 */
+export interface VendorProfile {
+  id: number
+  code: string
+  name: string
+  group_name: string
+  match_hosts: string
+  enabled: boolean
+  sort: number
+  builtin: boolean
+  config: VendorConfig
+  updated_at?: string
+}
+
+/** 档案可选维度，由后端暴露避免前端写死 */
+export interface VendorOptions {
+  reasoning: string[]
+  usage: string[]
+  response: string[]
+  error: string[]
+  auth: string[]
+  video: string[]
+  image: string[]
+  groups: string[]
 }
