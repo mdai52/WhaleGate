@@ -69,6 +69,16 @@ const currentScript = ref<VideoScript | null>(null)
 const scripts = ref<VideoScript[]>([])
 const scriptsLoading = ref(false)
 
+// 常用风格/受众预设：下拉可直接选，也允许自由输入其他值
+const styleOptions = [
+  '科技感', '电影感', '知识科普', '温馨治愈', '幽默搞笑',
+  '商务专业', '极简文艺', '国潮', '纪录片', 'Vlog 日常',
+].map((v) => ({ value: v }))
+const audienceOptions = [
+  '设计师', '学生', '上班族', '开发者', '宝妈 / 亲子',
+  '创业者', '科技爱好者', '通用大众',
+].map((v) => ({ value: v }))
+
 async function generateScript() {
   if (!scriptForm.model) {
     message.warning('请选择用于创作脚本的模型')
@@ -417,12 +427,22 @@ void loadWorks()
                 <a-row :gutter="12">
                   <a-col :span="12">
                     <a-form-item label="风格">
-                      <a-input v-model:value="scriptForm.style" placeholder="如 科技感 / 电影感" allow-clear />
+                      <a-auto-complete
+                        v-model:value="scriptForm.style"
+                        :options="styleOptions"
+                        placeholder="选择或输入，如 科技感 / 电影感"
+                        allow-clear
+                      />
                     </a-form-item>
                   </a-col>
                   <a-col :span="12">
                     <a-form-item label="目标受众">
-                      <a-input v-model:value="scriptForm.audience" placeholder="如 设计师 / 学生" allow-clear />
+                      <a-auto-complete
+                        v-model:value="scriptForm.audience"
+                        :options="audienceOptions"
+                        placeholder="选择或输入，如 设计师 / 学生"
+                        allow-clear
+                      />
                     </a-form-item>
                   </a-col>
                 </a-row>

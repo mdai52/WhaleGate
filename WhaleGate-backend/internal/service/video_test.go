@@ -66,7 +66,7 @@ func TestBuildVideoSubmitURL(t *testing.T) {
 
 func TestBuildVideoRequestFields(t *testing.T) {
 	seed := 42
-	body, err := gateway.BuildVideoRequest(gateway.ProtocolOpenAI, &spec.VideoRequest{
+	body, err := gateway.BuildVideoRequest(gateway.ProtocolOpenAI, "https://up.example.com/v1", &spec.VideoRequest{
 		Prompt:  "a cat on a roof",
 		Seconds: 8,
 		Size:    "1280x720",

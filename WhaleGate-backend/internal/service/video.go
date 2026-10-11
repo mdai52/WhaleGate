@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -23,6 +24,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 	"github.com/whalegate/whalegate/internal/pkg/storage"
 	"github.com/whalegate/whalegate/internal/pkg/util"
 )
@@ -30,16 +32,35 @@ import (
 // maxVideoBytes 单个视频文件转存上限（512MB）。
 const maxVideoBytes = 512 << 20
 
-// 脚本创作的系统提示词：强制模型输出可解析的 JSON，避免自由发挥导致解析失败。
-const scriptSystemPrompt = `你是一名专业的短视频分镜编剧。用户会给出创作需求，你需要输出严格符合以下 JSON 结构的分镜脚本，不要输出任何解释文字、Markdown 代码块或前后缀：
+// 脚本创作拆成两个阶段：
+//  1. 大纲：一次调用产出标题与每个镜头的一句话概要（输出小，返回快）；
+//  2. 扩写：各镜头并行调用模型补全画面/台词/运镜/提示词（每次输出都很小）。
+//
+// 单次大请求生成整份脚本时，思考型模型要一口气吐几千 token，又容易被
+// max_tokens 截断；拆开后总耗时 ≈ 大纲 + ⌈镜头数/并发⌉ × 单镜头，明显更快，
+// 也天然规避长输出截断。
+const outlineSystemPrompt = `你是一名专业的短视频分镜编剧。用户会给出创作需求，你只需要输出分镜大纲（不用写台词与提示词），严格输出以下 JSON，不要输出任何解释文字、Markdown 代码块或前后缀：
 
-{"title":"脚本标题","scenes":[{"index":1,"title":"镜头小标题","visual":"画面内容描述","narration":"旁白或台词","camera":"运镜方式","seconds":4,"prompt":"可直接用于视频生成模型的画面提示词（英文，含主体、动作、环境、光线、镜头语言、风格）"}]}
+{"title":"脚本标题","scenes":[{"index":1,"title":"镜头小标题","summary":"一句话概括该镜头的画面与内容","seconds":4}]}
 
 要求：
 1. scenes 数组长度等于用户要求的镜头数，index 从 1 连续递增
-2. seconds 为该镜头建议时长，各镜头 seconds 之和不超过用户要求的总时长
-3. prompt 必须是英文，描述一个静态可生成的画面，不要包含时间轴、转场与剪辑指令
-4. narration 使用与用户相同的语言`
+2. seconds 为该镜头建议时长，各镜头 seconds 之和不超过用户要求的总时长`
+
+const shotSystemPrompt = `你是一名专业的短视频分镜编剧。请根据创作需求把给定的一个镜头扩写成完整分镜，严格输出以下 JSON，不要输出任何解释文字、Markdown 代码块或前后缀：
+
+{"visual":"画面内容描述","narration":"旁白或台词","camera":"运镜方式","prompt":"可直接用于视频生成模型的画面提示词（英文，含主体、动作、环境、光线、镜头语言、风格）"}
+
+要求：
+1. visual、narration 使用与用户需求相同的语言
+2. prompt 必须是英文，描述一个静态可生成的画面，不要包含时间轴、转场与剪辑指令`
+
+// scriptShotSem 全局镜头扩写并发上限。
+//
+// 每个用户内部还会再限 4 并发，但上万人同时点「生成脚本」时，
+// 进程级信号量保证扩写请求总量有界，不会把上游对话渠道打满、
+// 挤占 API 转发主链路。
+var scriptShotSem = make(chan struct{}, 12)
 
 // ---------------------------------------------------------------- 可选模型
 
@@ -146,9 +167,30 @@ type scriptPayload struct {
 	Scenes []model.VideoScriptScene `json:"scenes"`
 }
 
+// outlinePayload 大纲阶段输出的结构（只到一句话概要，扩写由阶段二并行完成）。
+type outlinePayload struct {
+	Title  string `json:"title"`
+	Scenes []struct {
+		Index   int    `json:"index"`
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+		Seconds int    `json:"seconds"`
+	} `json:"scenes"`
+}
+
+// shotPayload 单个镜头扩写输出的结构。
+type shotPayload struct {
+	Visual    string `json:"visual"`
+	Narration string `json:"narration"`
+	Camera    string `json:"camera"`
+	Prompt    string `json:"prompt"`
+}
+
 // CreateVideoScript 生成分镜脚本并落库。
 //
-// 计费口径与 chat 转发一致（按 token）：先按估算用量预扣，成功按实际用量结算。
+// 计费口径与 chat 转发一致（按 token）：先按估算用量预扣，成功按各阶段
+// 实际用量合并结算。流程是「大纲一次调用 + 各镜头并行扩写」，见
+// outlineSystemPrompt 处的注释。
 func (c *Container) CreateVideoScript(
 	ctx context.Context,
 	userID uint,
@@ -173,23 +215,31 @@ func (c *Container) CreateVideoScript(
 		in.Duration = 30
 	}
 
-	messages := []spec.Message{
-		{Role: spec.RoleSystem, Content: scriptSystemPrompt},
-		{Role: spec.RoleUser, Content: buildScriptUserPrompt(in)},
+	userPrompt := buildScriptUserPrompt(in)
+	outlineMessages := []spec.Message{
+		{Role: spec.RoleSystem, Content: outlineSystemPrompt},
+		{Role: spec.RoleUser, Content: userPrompt},
 	}
-	request := &spec.UnifiedRequest{Model: in.Model, Messages: messages}
 	// 思考型模型（GLM 等）会把推理 token 也计入 max_tokens，给太小必然截断 JSON
-	if maxTokens := 1024 + in.Scenes*400; maxTokens > 0 {
-		if maxTokens > 8192 {
-			maxTokens = 8192
-		}
-		request.MaxTokens = &maxTokens
+	outlineMaxTokens := 256 + in.Scenes*128
+	if outlineMaxTokens > 4096 {
+		outlineMaxTokens = 4096
+	}
+
+	// 预扣按「大纲 + 全部镜头扩写」的估算总量；扩写请求此时还没构造出来，
+	// 用一个占位镜头估个代表值即可，误差由结算阶段按实际用量修正。
+	shotMessages := []spec.Message{
+		{Role: spec.RoleSystem, Content: shotSystemPrompt},
+		{Role: spec.RoleUser, Content: buildShotUserPrompt(in, "示例镜头", "示例概要", 4)},
+	}
+	estimate := c.EstimateUsage(&spec.UnifiedRequest{Model: in.Model, Messages: outlineMessages})
+	for i := 0; i < in.Scenes; i++ {
+		estimate.Add(c.EstimateUsage(&spec.UnifiedRequest{Model: in.Model, Messages: shotMessages}))
 	}
 
 	selfUse := c.SelfUseMode()
 	var reservation *Reservation
 	if !selfUse && userID > 0 {
-		estimate := c.EstimateUsage(request)
 		points, err := c.PointsFor(ctx, in.Model, estimate, 1)
 		if err == nil {
 			reservation, err = c.ReserveQuota(ctx, userID, points)
@@ -199,11 +249,8 @@ func (c *Container) CreateVideoScript(
 		}
 	}
 
-	result, err := c.CompleteText(ctx, TextCompleteInput{
-		Model:     in.Model,
-		Messages:  messages,
-		MaxTokens: *request.MaxTokens,
-	})
+	started := time.Now()
+	outline, outlineResult, err := c.generateScriptOutline(ctx, in, outlineMessages, outlineMaxTokens)
 	if err != nil {
 		if reservation != nil {
 			reservation.Release(context.Background())
@@ -211,16 +258,22 @@ func (c *Container) CreateVideoScript(
 		return nil, err
 	}
 
-	payload, err := parseScriptPayload(result.Text)
+	usage := outlineResult.Usage
+	scenes, shotResults, err := c.expandScenesInParallel(ctx, in, outline)
 	if err != nil {
 		if reservation != nil {
 			reservation.Release(context.Background())
 		}
-		return nil, apierr.Errorf(apierr.ErrUpstreamInvalid, "脚本解析失败：%s", err.Error())
+		return nil, err
 	}
+	for _, res := range shotResults {
+		usage.Add(res.Usage)
+	}
+
+	payload := &scriptPayload{Title: outline.Title, Scenes: scenes}
 	normalizeScenes(payload, in)
 
-	points, err := c.PointsFor(ctx, in.Model, result.Usage, 1)
+	points, err := c.PointsFor(ctx, in.Model, usage, 1)
 	if err != nil {
 		points = 0
 		if c.Logger != nil {
@@ -231,13 +284,13 @@ func (c *Container) CreateVideoScript(
 		reservation.Settle(ctx, points)
 	}
 	if keyID := meta.KeyID(); keyID > 0 {
-		c.UpdateAPIKeyUsage(ctx, keyID, result.Usage.TotalTokens, points)
+		c.UpdateAPIKeyUsage(ctx, keyID, usage.TotalTokens, points)
 	}
 
 	script := &model.VideoScript{
 		UserID:       userID,
 		APIKeyID:     meta.KeyID(),
-		ChannelID:    result.ChannelID,
+		ChannelID:    outlineResult.ChannelID,
 		Model:        in.Model,
 		Title:        payload.Title,
 		Brief:        in.Topic,
@@ -248,7 +301,7 @@ func (c *Container) CreateVideoScript(
 		Status:       model.VideoScriptStatusSuccess,
 		Points:       points,
 		SelfUse:      selfUse,
-		LatencyMS:    int(result.LatencyMS),
+		LatencyMS:    int(time.Since(started).Milliseconds()),
 	}
 	if script.Title == "" {
 		script.Title = truncate(in.Topic, 60)
@@ -264,21 +317,188 @@ func (c *Container) CreateVideoScript(
 		Model:            in.Model,
 		Protocol:         gateway.ProtocolOpenAI,
 		Status:           model.CallStatusSuccess,
-		PromptTokens:     result.Usage.PromptTokens,
-		CompletionTokens: result.Usage.CompletionTokens,
-		ReasoningTokens:  result.Usage.ReasoningTokens,
-		TotalTokens:      result.Usage.TotalTokens,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		ReasoningTokens:  usage.ReasoningTokens,
+		TotalTokens:      usage.TotalTokens,
 		Points:           points,
-		LatencyMS:        result.LatencyMS,
+		LatencyMS:        int64(script.LatencyMS),
 		UsageConfidence:  model.ConfidenceReported,
-		ChannelID:        result.ChannelID,
-		ChannelName:      result.ChannelName,
-		UpstreamModel:    result.UpstreamModel,
+		ChannelID:        outlineResult.ChannelID,
+		ChannelName:      outlineResult.ChannelName,
+		UpstreamModel:    outlineResult.UpstreamModel,
 		CreatedAt:        time.Now(),
 	})
 
 	view := toVideoScriptView(script)
 	return &view, nil
+}
+
+// generateScriptOutline 阶段一：让模型产出标题与每个镜头的一句话概要。
+func (c *Container) generateScriptOutline(
+	ctx context.Context,
+	in VideoScriptInput,
+	messages []spec.Message,
+	maxTokens int,
+) (*outlinePayload, *TextCompleteResult, error) {
+	result, err := c.CompleteText(ctx, TextCompleteInput{
+		Model:     in.Model,
+		Messages:  messages,
+		MaxTokens: maxTokens,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var outline outlinePayload
+	if err := parseRelaxedJSON(result.Text, &outline); err != nil {
+		return nil, nil, apierr.Errorf(apierr.ErrUpstreamInvalid, "脚本大纲解析失败：%s", err.Error())
+	}
+	if len(outline.Scenes) == 0 {
+		return nil, nil, apierr.New(apierr.ErrUpstreamInvalid, "模型未给出任何镜头大纲")
+	}
+	return &outline, result, nil
+}
+
+// expandScenesInParallel 阶段二：各镜头并行扩写。
+//
+// 单请求内限 4 并发（扩写是 IO 等待，少量并发就能把墙钟时间压到约 1/4），
+// 之上还有进程级 scriptShotSem 管多用户总量。任一镜头失败即取消其余并返回错误，
+// 避免拿着残缺脚本继续扣费。
+func (c *Container) expandScenesInParallel(
+	ctx context.Context,
+	in VideoScriptInput,
+	outline *outlinePayload,
+) ([]model.VideoScriptScene, []*TextCompleteResult, error) {
+	count := len(outline.Scenes)
+	results := make([]*TextCompleteResult, count)
+	scenes := make([]model.VideoScriptScene, count)
+
+	expCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	limit := 4
+	if count < limit {
+		limit = count
+	}
+	sem := make(chan struct{}, limit)
+
+	for i := range outline.Scenes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-expCtx.Done():
+				return
+			}
+			select {
+			case scriptShotSem <- struct{}{}:
+				defer func() { <-scriptShotSem }()
+			case <-expCtx.Done():
+				return
+			}
+
+			res, err := c.expandOneShot(expCtx, in, outline, i)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("第 %d 镜扩写失败：%w", i+1, err)
+				}
+				mu.Unlock()
+				// 让其余在途镜头尽快退出，不再浪费上游调用
+				cancel()
+				return
+			}
+			results[i] = res
+		}(i)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	for i := range outline.Scenes {
+		scene := &scenes[i]
+		scene.Index = i + 1
+		scene.Title = outline.Scenes[i].Title
+		scene.Seconds = outline.Scenes[i].Seconds
+		scene.Visual = outline.Scenes[i].Summary
+		if results[i] == nil {
+			continue
+		}
+		var shot shotPayload
+		if err := parseRelaxedJSON(results[i].Text, &shot); err != nil {
+			// 单个镜头扩写解析失败不整单作废：退回大纲概要，总比浪费整次调用强
+			if c.Logger != nil {
+				c.Logger.Warn("镜头扩写解析失败，退回大纲概要",
+					zap.Int("scene", i+1), zap.Error(err))
+			}
+			continue
+		}
+		if shot.Visual != "" {
+			scene.Visual = shot.Visual
+		}
+		scene.Narration = shot.Narration
+		scene.Camera = shot.Camera
+		if shot.Prompt != "" {
+			scene.Prompt = shot.Prompt
+		}
+	}
+	return scenes, results, nil
+}
+
+// expandOneShot 扩写一个镜头。
+func (c *Container) expandOneShot(
+	ctx context.Context,
+	in VideoScriptInput,
+	outline *outlinePayload,
+	i int,
+) (*TextCompleteResult, error) {
+	scene := outline.Scenes[i]
+	messages := []spec.Message{
+		{Role: spec.RoleSystem, Content: shotSystemPrompt},
+		{Role: spec.RoleUser, Content: buildShotUserPrompt(in, scene.Title, scene.Summary, scene.Seconds)},
+	}
+	result, err := c.CompleteText(ctx, TextCompleteInput{
+		Model:     in.Model,
+		Messages:  messages,
+		MaxTokens: 1024,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// buildShotUserPrompt 拼接单个镜头的扩写输入：完整需求 + 该镜头的大纲信息。
+func buildShotUserPrompt(in VideoScriptInput, title, summary string, seconds int) string {
+	var sb strings.Builder
+	sb.WriteString(buildScriptUserPrompt(in))
+	sb.WriteString("\n\n请扩写这个镜头：\n镜头标题：")
+	if title == "" {
+		title = "（未命名）"
+	}
+	sb.WriteString(title)
+	sb.WriteString("\n镜头概要：")
+	if summary == "" {
+		summary = in.Topic
+	}
+	sb.WriteString(summary)
+	if seconds > 0 {
+		sb.WriteString("\n镜头时长：")
+		sb.WriteString(strconv.Itoa(seconds))
+		sb.WriteString(" 秒")
+	}
+	return sb.String()
 }
 
 // ListVideoScripts 分页查询当前用户的脚本。
@@ -379,33 +599,42 @@ func buildScriptUserPrompt(in VideoScriptInput) string {
 // （智谱 GLM 等思考模型常见 <think>…</think>），有的输出被 max_tokens 截断。
 // 这里从宽松到严格依次尝试，失败时把原始输出片段带回去，方便判断是哪种情况。
 func parseScriptPayload(text string) (*scriptPayload, error) {
+	payload := &scriptPayload{}
+	if err := parseRelaxedJSON(text, payload); err != nil {
+		return nil, err
+	}
+	return checkScenes(payload)
+}
+
+// parseRelaxedJSON 按宽松策略解析模型输出的 JSON：
+// 去 <think> 块 → 括号配对截取 → 去尾随逗号 → 截断补齐。
+func parseRelaxedJSON(text string, v interface{}) error {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return nil, fmt.Errorf("模型未返回内容")
+		return fmt.Errorf("模型未返回内容")
 	}
 	trimmed = stripThinkBlocks(trimmed)
 
 	candidate := extractJSONObject(trimmed)
 	if candidate == "" {
-		return nil, fmt.Errorf("输出中未找到 JSON 对象：%s", outputSnippet(trimmed))
+		return fmt.Errorf("输出中未找到 JSON 对象：%s", outputSnippet(trimmed))
 	}
 
-	payload := &scriptPayload{}
-	if err := json.Unmarshal([]byte(candidate), payload); err == nil {
-		return checkScenes(payload)
+	if err := json.Unmarshal([]byte(candidate), v); err == nil {
+		return nil
 	}
 	// 常见脏字符：数组与对象末尾的尾随逗号
 	repaired := trailingComma.ReplaceAllString(candidate, "$1")
-	if err := json.Unmarshal([]byte(repaired), payload); err == nil {
-		return checkScenes(payload)
+	if err := json.Unmarshal([]byte(repaired), v); err == nil {
+		return nil
 	}
 	// 输出被截断：补齐缺失的右括号后多数能救回来
 	if salvaged := closeTruncatedJSON(repaired); salvaged != "" {
-		if err := json.Unmarshal([]byte(salvaged), payload); err == nil {
-			return checkScenes(payload)
+		if err := json.Unmarshal([]byte(salvaged), v); err == nil {
+			return nil
 		}
 	}
-	return nil, fmt.Errorf("无法解析为 JSON（可能是输出被 max_tokens 截断）：%s", outputSnippet(candidate))
+	return fmt.Errorf("无法解析为 JSON（可能是输出被 max_tokens 截断）：%s", outputSnippet(candidate))
 }
 
 func checkScenes(payload *scriptPayload) (*scriptPayload, error) {
@@ -688,7 +917,7 @@ func (c *Container) SubmitVideoWork(
 		}
 		return nil, apierr.Wrap(apierr.ErrInvalidParam, err)
 	}
-	payload, err := gateway.BuildVideoRequest(channel.Type, in.toSpec(), upstreamModel)
+	payload, err := gateway.BuildVideoRequest(channel.Type, channel.BaseURL, in.toSpec(), upstreamModel)
 	if err != nil {
 		if reservation != nil {
 			reservation.Release(ctx)
@@ -715,7 +944,7 @@ func (c *Container) SubmitVideoWork(
 	}
 	upstream := gateway.NewUpstream(c.upstreamTimeout(channel))
 	resp, err := upstream.Do(ctx, http.MethodPost, submitURL,
-		gateway.BuildUpstreamHeaders(channel.Type, apiKey), body)
+		gateway.BuildUpstreamHeaders(channel.Type, apiKey, vendor.FromBaseURL(channel.BaseURL)), body)
 	if err != nil {
 		if reservation != nil {
 			reservation.Release(ctx)
@@ -735,7 +964,7 @@ func (c *Container) SubmitVideoWork(
 		if reservation != nil {
 			reservation.Release(ctx)
 		}
-		msg := gateway.ExtractUpstreamError(channel.Type, raw)
+		msg := gateway.ExtractUpstreamError(channel.Type, raw, vendor.FromBaseURL(channel.BaseURL))
 		if msg == "" {
 			msg = strings.TrimSpace(string(raw))
 		}
@@ -839,7 +1068,7 @@ func (c *Container) pollVideoWork(
 		}
 		upstream := gateway.NewUpstream(c.upstreamTimeout(&channel))
 		resp, err := upstream.Do(ctx, http.MethodGet, statusURL,
-			gateway.BuildUpstreamHeaders(channel.Type, apiKey), nil)
+			gateway.BuildUpstreamHeaders(channel.Type, apiKey, vendor.FromBaseURL(channel.BaseURL)), nil)
 		if err != nil {
 			// 轮询失败多为网络抖动，重试到超时为止，不立即判死。
 			if !sleepCtx(ctx, interval) {
@@ -975,7 +1204,7 @@ func (c *Container) fetchVideoContent(ctx context.Context, channel *model.Channe
 	}
 	upstream := gateway.NewUpstream(c.upstreamTimeout(channel))
 	resp, err := upstream.Do(ctx, http.MethodGet, contentURL,
-		gateway.BuildUpstreamHeaders(channel.Type, apiKey), nil)
+		gateway.BuildUpstreamHeaders(channel.Type, apiKey, vendor.FromBaseURL(channel.BaseURL)), nil)
 	if err != nil {
 		return spec.Video{}, classifyTextError(err)
 	}

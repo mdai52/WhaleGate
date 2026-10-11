@@ -57,6 +57,21 @@ func (h *StudioHandler) Generate(c *gin.Context) {
 	response.Created(c, work)
 }
 
+// EnhancePrompt 用对话模型把简短想法扩写成生图提示词：POST /api/v1/studio/enhance-prompt
+func (h *StudioHandler) EnhancePrompt(c *gin.Context) {
+	var in service.PromptEnhanceInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		response.Fail(c, bindError(err))
+		return
+	}
+	text, err := h.svc.EnhancePrompt(c.Request.Context(), CurrentUserID(c), in, newImageCallMeta(h.svc, c))
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"prompt": text})
+}
+
 // Works 分页查询作品库：GET /api/v1/studio/works
 func (h *StudioHandler) Works(c *gin.Context) {
 	p := ParsePage(c)
