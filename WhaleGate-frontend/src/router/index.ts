@@ -51,6 +51,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '视频工作台', icon: 'VideoCameraOutlined' },
       },
       {
+        path: 'canvas',
+        name: 'canvas',
+        component: () => import('@/views/CanvasView.vue'),
+        meta: { title: '画布工作台', icon: 'HighlightOutlined' },
+      },
+      {
         path: 'keys',
         name: 'keys',
         component: () => import('@/views/KeysView.vue'),
@@ -79,6 +85,12 @@ const routes: RouteRecordRaw[] = [
         name: 'admin-channels',
         component: () => import('@/views/admin/ChannelsView.vue'),
         meta: { title: '渠道管理', icon: 'ApiOutlined', admin: true, group: '管理后台' },
+      },
+      {
+        path: 'admin/vendors',
+        name: 'admin-vendors',
+        component: () => import('@/views/admin/VendorProfilesView.vue'),
+        meta: { title: '厂商适配', icon: 'GlobalOutlined', admin: true, group: '管理后台' },
       },
       {
         path: 'admin/settings',

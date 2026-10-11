@@ -48,6 +48,14 @@ type CallLog struct {
 	ImageCount int `json:"image_count"`
 	// VideoSeconds 本次调用生成的视频秒数；非视频调用为 0。
 	VideoSeconds int `json:"video_seconds"`
+	// CanvasCount 本次调用导出的画布张数；非画布导出为 0。
+	CanvasCount int `json:"canvas_count"`
+	// CanvasPixels 导出图的像素总数，画布导出的计量单位：
+	// 它直接对应一次渲染的内存与 CPU 开销（宽×高×4 字节），
+	// 也是判断"谁的导出在吃资源"最直观的指标。
+	CanvasPixels int64 `json:"canvas_pixels"`
+	// CanvasBytes 导出文件字节数。
+	CanvasBytes int64 `json:"canvas_bytes"`
 
 	LatencyMS    int64 `json:"latency_ms"`
 	FirstTokenMS int64 `json:"first_token_ms"`

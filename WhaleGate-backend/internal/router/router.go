@@ -92,6 +92,8 @@ func registerAPI(e *gin.Engine, d Deps) {
 	credentialHandler := handler.NewCredentialHandler(d.Svc)
 	account := handler.NewAccountHandler(d.Svc)
 	studio := handler.NewStudioHandler(d.Svc)
+	canvas := handler.NewCanvasHandler(d.Svc)
+	vendorHandler := handler.NewVendorProfileHandler(d.Svc)
 	videoStudio := handler.NewVideoStudioHandler(d.Svc)
 	playground := handler.NewPlaygroundHandler(d.Svc)
 	group := handler.NewGroupHandler(d.Svc)
@@ -169,6 +171,7 @@ func registerAPI(e *gin.Engine, d Deps) {
 			studioGroup.GET("/models", studio.Models)
 			studioGroup.GET("/prompts", studio.Prompts)
 			studioGroup.POST("/images", studio.Generate)
+			studioGroup.POST("/enhance-prompt", studio.EnhancePrompt)
 			studioGroup.GET("/works", studio.Works)
 			studioGroup.DELETE("/works/:id", studio.DeleteWork)
 			studioGroup.GET("/works/:id/images/:index", studio.WorkImage)
@@ -187,6 +190,24 @@ func registerAPI(e *gin.Engine, d Deps) {
 			videoGroup.GET("/works/:id", videoStudio.Work)
 			videoGroup.DELETE("/works/:id", videoStudio.DeleteWork)
 			videoGroup.GET("/works/:id/videos/:index", videoStudio.WorkVideo)
+		}
+
+		// 画布工作台：画布 CRUD 与导出（导出走服务端异步渲染队列）
+		canvasGroup := authed.Group("/studio/canvas")
+		{
+			canvasGroup.GET("", canvas.List)
+			canvasGroup.POST("", canvas.Create)
+			canvasGroup.GET("/:id", canvas.Get)
+			canvasGroup.PUT("/:id", canvas.Update)
+			canvasGroup.DELETE("/:id", canvas.Delete)
+			canvasGroup.POST("/:id/exports", canvas.SubmitExport)
+		}
+		// 导出任务单独成组：避免 /studio/canvas/:id 与静态路径在同层竞争匹配。
+		canvasExportGroup := authed.Group("/studio/canvas-exports")
+		{
+			canvasExportGroup.GET("", canvas.ListExports)
+			canvasExportGroup.GET("/:id", canvas.GetExport)
+			canvasExportGroup.GET("/:id/content", canvas.Download)
 		}
 
 		// 参数调试：预览自定义参数会被如何分配（不发起上游请求、不计费）
@@ -235,9 +256,23 @@ func registerAPI(e *gin.Engine, d Deps) {
 			{
 				skills.GET("", skill.List)
 				skills.POST("/scan", skill.Scan)
+				// 压缩包导入：体积上限由管理员在系统设置里配置。
+				skills.POST("/upload", skill.Upload)
 				skills.PATCH("/:id/toggle", skill.Toggle)
 				skills.PATCH("/:id/mode", skill.SetMode)
 				skills.DELETE("/:id", skill.Delete)
+			}
+
+			// 厂商适配档案：各家 OpenAI 兼容协议的差异（端点 / 鉴权 / 字段命名 / 错误外壳）
+			vendors := adminGroup.Group("/vendors")
+			{
+				vendors.GET("", vendorHandler.List)
+				vendors.GET("/options", vendorHandler.Options)
+				vendors.POST("/reload", vendorHandler.Reload)
+				vendors.POST("", vendorHandler.Create)
+				vendors.GET("/:id", vendorHandler.Get)
+				vendors.PUT("/:id", vendorHandler.Update)
+				vendors.DELETE("/:id", vendorHandler.Delete)
 			}
 
 			// MCP 服务与工具

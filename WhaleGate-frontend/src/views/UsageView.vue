@@ -71,6 +71,21 @@ function formatTime(value?: string) {
   return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '—'
 }
 
+/** 像素数按百万为单位展示：直接显示 8294400 这种数字没有可读性 */
+function formatPixels(value?: number) {
+  if (!value) return '0 像素'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MP`
+  if (value >= 1000) return `${Math.round(value / 1000)} K 像素`
+  return `${value} 像素`
+}
+
+function formatBytes(value?: number) {
+  if (!value) return '0 B'
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`
+  return `${value} B`
+}
+
 load()
 </script>
 
@@ -127,6 +142,11 @@ load()
             <!-- 生图按张、视频按秒计费，都没有 token 口径，这里改显示张数 / 秒数 -->
             <template v-if="(record as CallLog).image_count > 0">
               <a-tag color="cyan">{{ (record as CallLog).image_count }} 张</a-tag>
+            </template>
+            <template v-else-if="(record as CallLog).canvas_count > 0">
+              <!-- 画布导出是本机渲染：没有 token 口径，按像素与体积计量 -->
+              <a-tag color="orange">{{ formatPixels((record as CallLog).canvas_pixels) }}</a-tag>
+              <div class="wg-muted">{{ formatBytes((record as CallLog).canvas_bytes) }}</div>
             </template>
             <template v-else-if="(record as CallLog).video_seconds > 0">
               <a-tag color="geekblue">{{ (record as CallLog).video_seconds }} 秒视频</a-tag>
