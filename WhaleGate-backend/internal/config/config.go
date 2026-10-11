@@ -49,6 +49,29 @@ type StudioConfig struct {
 	// VideoDownloadTimeout 拉取上游视频内容的超时；视频统一转存，
 	// 避免上游链接过期后作品库无法回看。
 	VideoDownloadTimeout time.Duration `mapstructure:"video_download_timeout"`
+
+	// CanvasWorkers 画布导出渲染的并发 worker 数。
+	CanvasWorkers int `mapstructure:"canvas_workers"`
+	// CanvasQueueSize 导出任务的排队上限；超出直接拒绝并提示稍后重试，
+	// 而不是无限堆积把内存拖垮。
+	CanvasQueueSize int `mapstructure:"canvas_queue_size"`
+	// CanvasTaskTimeout 单个导出任务的最长执行时间，超时按失败处理。
+	CanvasTaskTimeout time.Duration `mapstructure:"canvas_task_timeout"`
+	// CanvasMaxDimension 画布单边最大像素数。
+	CanvasMaxDimension int `mapstructure:"canvas_max_dimension"`
+	// CanvasMaxPixels 画布总像素上限（含导出缩放），决定一次渲染的内存峰值。
+	CanvasMaxPixels int `mapstructure:"canvas_max_pixels"`
+	// CanvasMaxNodes 单张画布的节点数上限。
+	CanvasMaxNodes int `mapstructure:"canvas_max_nodes"`
+	// CanvasMaxImageBytes 单个内嵌图片的字节数上限。
+	CanvasMaxImageBytes int `mapstructure:"canvas_max_image_bytes"`
+	// CanvasMaxScale 导出缩放倍数上限。
+	CanvasMaxScale int `mapstructure:"canvas_max_scale"`
+	// CanvasJPEGQuality JPEG 导出质量（1-100）。
+	CanvasJPEGQuality int `mapstructure:"canvas_jpeg_quality"`
+	// CanvasFontPath 自定义字体文件（TTF/OTF）；内置字体不含中文字形，
+	// 画布要写中文时在这里配一个 CJK 字体。
+	CanvasFontPath string `mapstructure:"canvas_font_path"`
 }
 
 // SkillsConfig 技能目录配置。
@@ -418,6 +441,18 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("studio.video_max_wait", "10m")
 	v.SetDefault("studio.video_max_seconds", 20)
 	v.SetDefault("studio.video_download_timeout", "180s")
+	// 画布导出是 CPU 与内存密集操作，默认并发取 CPU 核数与 4 的较小值，
+	// 避免一张超大画布就把整机 CPU 占满。
+	v.SetDefault("studio.canvas_workers", 0)
+	v.SetDefault("studio.canvas_queue_size", 64)
+	v.SetDefault("studio.canvas_task_timeout", "120s")
+	v.SetDefault("studio.canvas_max_dimension", 4096)
+	v.SetDefault("studio.canvas_max_pixels", 8<<20)
+	v.SetDefault("studio.canvas_max_nodes", 2000)
+	v.SetDefault("studio.canvas_max_image_bytes", 8<<20)
+	v.SetDefault("studio.canvas_max_scale", 4)
+	v.SetDefault("studio.canvas_jpeg_quality", 90)
+	v.SetDefault("studio.canvas_font_path", "")
 }
 
 // ParseSize 解析 "32MB" / "512KB" / "1GB" 这类容量字符串，非法时返回 false。

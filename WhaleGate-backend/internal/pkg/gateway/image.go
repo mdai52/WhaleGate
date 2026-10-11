@@ -16,6 +16,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/gateway/gemini"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/openai"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 )
 
 // ImageResponseFormatURL / ImageResponseFormatB64 上游返回格式。
@@ -27,7 +28,12 @@ const (
 // SupportsImageGeneration 判断渠道协议是否具备原生图片生成能力。
 // Anthropic Messages API 不提供图片生成，明确报错比让上游返回 404 更易排查。
 func SupportsImageGeneration(channelType string) bool {
-	return channelType == ProtocolOpenAI || channelType == ProtocolGemini
+	switch channelType {
+	case ProtocolOpenAI, ProtocolGemini:
+		return true
+	default:
+		return false
+	}
 }
 
 // imageModelKeywords 生图模型名关键词。各家命名差异很大，且渠道登记的模型列表
@@ -52,14 +58,19 @@ func IsImageModel(id string) bool {
 	return false
 }
 
-// BuildImageUpstreamURL 按渠道协议拼装图片生成端点。
-func BuildImageUpstreamURL(channelType, baseURL, model string) (string, error) {
+// BuildImageUpstreamURL 按渠道协议与厂商拼装图片生成端点。
+func BuildImageUpstreamURL(channelType, baseURL, model string, v *vendor.Vendor) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		return "", fmt.Errorf("渠道未配置上游地址")
 	}
 	switch channelType {
 	case ProtocolOpenAI:
+		// 百炼的同步生图只开在兼容端点上；管理员填根地址时自动补全版本前缀，
+		// 免得因为少一段路径得到 404。
+		if v.ImageStyle() == vendor.ImageDashScope && !strings.Contains(base, "compatible-mode") {
+			base += "/compatible-mode/v1"
+		}
 		return base + "/images/generations", nil
 	case ProtocolGemini:
 		return fmt.Sprintf("%s/models/%s:%s", base, model, gemini.ActionGenerateContent), nil
@@ -69,7 +80,7 @@ func BuildImageUpstreamURL(channelType, baseURL, model string) (string, error) {
 }
 
 // BuildImageRequest 把统一的图片请求转换为上游请求体，model 为映射后的上游模型名。
-func BuildImageRequest(channelType string, req *spec.ImageRequest, model string) (map[string]interface{}, error) {
+func BuildImageRequest(channelType string, req *spec.ImageRequest, model string, profile *vendor.Vendor) (map[string]interface{}, error) {
 	if req == nil {
 		return nil, fmt.Errorf("请求为空")
 	}
@@ -81,7 +92,7 @@ func BuildImageRequest(channelType string, req *spec.ImageRequest, model string)
 	}
 	switch channelType {
 	case ProtocolOpenAI:
-		return buildOpenAIImageRequest(req, model), nil
+		return buildOpenAIImageRequest(req, model, profile), nil
 	case ProtocolGemini:
 		return buildGeminiImageRequest(req, model), nil
 	default:
@@ -90,7 +101,7 @@ func BuildImageRequest(channelType string, req *spec.ImageRequest, model string)
 }
 
 // buildOpenAIImageRequest 构造 OpenAI 兼容的 /images/generations 请求体。
-func buildOpenAIImageRequest(req *spec.ImageRequest, model string) map[string]interface{} {
+func buildOpenAIImageRequest(req *spec.ImageRequest, model string, profile *vendor.Vendor) map[string]interface{} {
 	// 扩展参数先铺底，标准字段随后覆盖，保证语义明确。
 	body := make(map[string]interface{}, len(req.Extra)+8)
 	for k, v := range req.Extra {
@@ -108,7 +119,7 @@ func buildOpenAIImageRequest(req *spec.ImageRequest, model string) map[string]in
 		body["n"] = req.N
 	}
 	if req.Size != "" {
-		body["size"] = req.Size
+		body["size"] = normalizeImageSize(req.Size, profile)
 	}
 	if req.Quality != "" {
 		body["quality"] = req.Quality
@@ -155,10 +166,10 @@ func buildGeminiImageRequest(req *spec.ImageRequest, model string) map[string]in
 }
 
 // ParseImageResponse 解析上游图片生成响应。
-func ParseImageResponse(channelType string, raw []byte) (*spec.ImageResponse, error) {
+func ParseImageResponse(channelType string, raw []byte, v *vendor.Vendor) (*spec.ImageResponse, error) {
 	switch channelType {
 	case ProtocolOpenAI:
-		return parseOpenAIImages(raw)
+		return parseOpenAIImages(raw, v)
 	case ProtocolGemini:
 		return parseGeminiImages(raw)
 	default:
@@ -167,7 +178,7 @@ func ParseImageResponse(channelType string, raw []byte) (*spec.ImageResponse, er
 }
 
 // parseOpenAIImages 解析 OpenAI 兼容的 images 响应。
-func parseOpenAIImages(raw []byte) (*spec.ImageResponse, error) {
+func parseOpenAIImages(raw []byte, v *vendor.Vendor) (*spec.ImageResponse, error) {
 	var resp struct {
 		Created int64  `json:"created"`
 		Model   string `json:"model"`
@@ -213,6 +224,17 @@ func parseOpenAIImages(raw []byte) (*spec.ImageResponse, error) {
 		out.Images = append(out.Images, img)
 	}
 	if len(out.Images) == 0 {
+		// 百炼的原生生图端点是异步的（只回一个 task_id），
+		// 与其让用户对着空结果猜，不如直接说清楚该怎么改。
+		var async struct {
+			Output struct {
+				TaskID string `json:"task_id"`
+			} `json:"output"`
+		}
+		if err := json.Unmarshal(raw, &async); err == nil && async.Output.TaskID != "" {
+			return nil, fmt.Errorf("上游返回的是异步任务 %s，网关只支持同步生图；"+
+				"百炼请改用 OpenAI 兼容端点（…/compatible-mode/v1）", async.Output.TaskID)
+		}
 		return nil, fmt.Errorf("上游未返回图片")
 	}
 	if resp.Usage != nil {
@@ -225,6 +247,17 @@ func parseOpenAIImages(raw []byte) (*spec.ImageResponse, error) {
 		out.Usage = usage
 	}
 	return out, nil
+}
+
+// normalizeImageSize 把尺寸写成上游接受的格式。
+//
+// OpenAI 用 1024x1024，百炼用 1024*1024——差一个分隔符上游就报参数非法，
+// 而管理员填的尺寸来自前端统一格式，只能在出口这里换算。
+func normalizeImageSize(size string, profile *vendor.Vendor) string {
+	if profile != nil && profile.ImageStyle() == vendor.ImageDashScope {
+		return strings.ReplaceAll(size, "x", "*")
+	}
+	return size
 }
 
 // parseGeminiImages 从 Gemini 的 generateContent 响应中提取 inlineData 图片。

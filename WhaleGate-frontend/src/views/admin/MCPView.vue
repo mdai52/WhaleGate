@@ -390,10 +390,6 @@ onMounted(load)
         </div>
 
         <div class="wg-guide-foot">
-          <a-button type="primary" @click="openCreate">
-            <PlusOutlined />
-            新增服务
-          </a-button>
           <span class="wg-muted">模板只是预填表单，路径与令牌需要按你的环境调整</span>
         </div>
       </div>
@@ -637,14 +633,14 @@ pre {
 
 /* ---- 空状态接入指引 ---- */
 .wg-guide {
-  padding: 24px 8px 8px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 0 8px;
 }
 .wg-guide-steps {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
-  max-width: 860px;
-  margin: 0 auto;
 }
 .wg-guide-step {
   display: flex;
@@ -674,8 +670,6 @@ pre {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
-  max-width: 860px;
-  margin: 0 auto;
 }
 .wg-template {
   padding: 12px 16px;
@@ -698,10 +692,7 @@ pre {
   color: var(--wg-primary, #1677ff);
 }
 .wg-guide-foot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 20px;
+  margin-top: 16px;
+  text-align: center;
 }
 </style>

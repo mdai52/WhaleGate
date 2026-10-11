@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"io"
+	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/whalegate/whalegate/internal/model"
+	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/response"
 	"github.com/whalegate/whalegate/internal/service"
 )
@@ -43,6 +46,42 @@ func (h *SkillHandler) Scan(c *gin.Context) {
 		return
 	}
 	auditOK(h.svc, c, model.AuditSettingsUpdate, "skill", "scan", "扫描并导入 "+strconv.Itoa(count)+" 个技能")
+	response.OK(c, gin.H{"imported": count})
+}
+
+// Upload 从压缩包导入技能。
+//
+// 体积上限在 service 层按管理员配置校验；这里先用 MaxBytesReader 再卡一道，
+// 让超限的包在进入内存之前就被截断，而不是整个读进来再丢弃。
+func (h *SkillHandler) Upload(c *gin.Context) {
+	limits := h.svc.SkillsImportLimits()
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limits.MaxUploadBytes)
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		response.Fail(c, apierr.Wrap(apierr.ErrInvalidParam, err))
+		return
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		response.Fail(c, apierr.Wrap(apierr.ErrInvalidParam, err))
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		response.Fail(c, apierr.New(apierr.ErrInvalidParam,
+			"上传文件过大或读取失败，可在系统设置调整技能导入上限"))
+		return
+	}
+	count, err := h.svc.ImportSkills(c.Request.Context(), fileHeader.Filename, data)
+	if err != nil {
+		auditFail(h.svc, c, model.AuditSkillUpdate, "skill", fileHeader.Filename, err.Error())
+		response.Fail(c, err)
+		return
+	}
+	auditOK(h.svc, c, model.AuditSkillUpdate, "skill", fileHeader.Filename,
+		"压缩包导入 "+strconv.Itoa(count)+" 个技能")
 	response.OK(c, gin.H{"imported": count})
 }
 

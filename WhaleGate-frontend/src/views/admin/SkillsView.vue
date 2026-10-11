@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { CopyOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, DeleteOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { skillApi } from '@/api/skill'
 import type { Skill } from '@/api/types'
 
 const loading = ref(false)
 const scanning = ref(false)
+const uploading = ref(false)
 const items = ref<Skill[]>([])
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 })
 const keyword = ref('')
@@ -84,6 +85,27 @@ async function scan() {
   }
 }
 
+/** 压缩包导入：交给后端按管理员配置的上限校验，前端只在成功后刷新列表 */
+async function upload(file: File) {
+  uploading.value = true
+  try {
+    const res = await skillApi.upload(file)
+    message.success(`导入成功，新增或更新 ${res.imported} 个技能`)
+    await load()
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '导入失败')
+  } finally {
+    uploading.value = false
+  }
+  return false
+}
+
+function beforeUpload(file: File) {
+  void upload(file)
+  // 返回 false 阻止 a-upload 的默认提交：这里的请求已由 skillApi.upload 发出。
+  return false
+}
+
 async function toggle(row: Skill, checked: boolean) {
   await skillApi.toggle(row.id, checked)
   message.success(checked ? `已启用「${row.name}」` : `已停用「${row.name}」`)
@@ -140,10 +162,22 @@ onMounted(load)
             </template>
           </div>
         </div>
-        <a-button type="primary" :loading="scanning" @click="scan">
-          <ReloadOutlined />
-          扫描导入
-        </a-button>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <a-upload
+            :show-upload-list="false"
+            accept=".zip,.tar.gz,.tgz"
+            :before-upload="beforeUpload"
+          >
+            <a-button :loading="uploading">
+              <UploadOutlined />
+              压缩包导入
+            </a-button>
+          </a-upload>
+          <a-button type="primary" :loading="scanning" @click="scan">
+            <ReloadOutlined />
+            扫描导入
+          </a-button>
+        </div>
       </div>
 
       <!-- 目录结构与 frontmatter 用并列卡片，比一段说明更容易照着做 -->
@@ -185,23 +219,18 @@ onMounted(load)
           </div>
         </div>
 
-        <a-divider class="wg-guide-divider">
-          <span class="wg-muted">SKILL.md 示例</span>
-        </a-divider>
-
         <div class="wg-example">
+          <div class="wg-example-head">
+            <span>SKILL.md 示例</span>
+            <a-button size="small" @click="copyExample">
+              <CopyOutlined />
+              复制示例
+            </a-button>
+          </div>
           <pre class="wg-example-body">{{ skillExample }}</pre>
-          <a-button size="small" @click="copyExample">
-            <CopyOutlined />
-            复制示例
-          </a-button>
         </div>
 
         <div class="wg-guide-foot">
-          <a-button type="primary" :loading="scanning" @click="scan">
-            <ReloadOutlined />
-            扫描导入
-          </a-button>
           <span class="wg-muted">目录可在上方「扫描目录」指定，留空用配置里的 skills.dir</span>
         </div>
       </div>
@@ -345,14 +374,14 @@ onMounted(load)
 }
 
 .wg-guide {
-  padding: 24px 8px 8px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 0 8px;
 }
 .wg-guide-steps {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
-  max-width: 860px;
-  margin: 0 auto;
 }
 .wg-guide-step {
   display: flex;
@@ -375,30 +404,33 @@ onMounted(load)
   font-weight: 600;
   margin-bottom: 2px;
 }
-.wg-guide-divider {
-  margin: 24px 0 16px;
-}
 .wg-example {
-  max-width: 620px;
-  margin: 0 auto;
-  text-align: right;
-}
-.wg-example-body {
-  text-align: left;
-  margin: 0 0 10px;
-  padding: 12px;
-  background: #fafafa;
+  margin-top: 20px;
   border: 1px solid #f0f0f0;
   border-radius: 8px;
+  overflow: hidden;
+}
+.wg-example-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.wg-example-body {
+  margin: 0;
+  padding: 12px;
+  background: #fff;
   font-size: 12px;
+  line-height: 1.7;
   white-space: pre-wrap;
 }
 .wg-guide-foot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 20px;
+  margin-top: 16px;
+  text-align: center;
 }
 
 .wg-clamp {

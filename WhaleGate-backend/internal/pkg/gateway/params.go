@@ -237,10 +237,10 @@ func ApplyParams(
 	}
 
 	targets := openAIParamTargets
-	switch {
-	case channelType == ProtocolGemini:
+	switch channelType {
+	case ProtocolGemini:
 		targets = geminiParamTargets
-	case IsAnthropicLike(channelType):
+	case ProtocolAnthropic, ProtocolClaudeCode:
 		targets = anthropicParamTargets
 	}
 	supported := SupportedParams(channelType, schema)

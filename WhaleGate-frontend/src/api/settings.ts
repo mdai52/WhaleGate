@@ -59,6 +59,17 @@ export interface Settings {
   allow_registration: boolean
   /** 视频单次生成最大秒数 */
   video_max_seconds: number
+
+  // ---------------------------------------------------------------- 技能导入
+
+  /** 技能压缩包上传体积上限（MB） */
+  skills_max_upload_mb: number
+  /** 解压后总字节上限（MB），用于拦截压缩炸弹 */
+  skills_max_total_mb: number
+  /** 单个技能文件大小上限（MB） */
+  skills_max_file_mb: number
+  /** 压缩包内条目数上限 */
+  skills_max_entries: number
 }
 
 export const settingsApi = {

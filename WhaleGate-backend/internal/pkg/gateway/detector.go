@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 )
 
 // 能力标识。
@@ -113,18 +114,52 @@ func protocolOrder(hint string) []probeSpec {
 			Parse:    parseGeminiModels,
 		},
 	}
-	if hint == "" {
-		return all
+	return reorderProbes(all, hint)
+}
+
+// vendorProbeSpec 按厂商档案生成一条探测规则。
+//
+// Azure 的模型列表要 api-key 头与 api-version 查询串、Ollama 的兼容端点在 /v1 下、
+// 百炼要 compatible-mode/v1 前缀——这些都不是「改个路径」能覆盖的，
+// 但它们的报文仍是 OpenAI 形态，因此探测类型统一是 openai，只是端点与鉴权按档案来。
+func vendorProbeSpec(base string, v *vendor.Vendor) *probeSpec {
+	if v == nil || !v.HasCustomEndpoint() {
+		return nil
 	}
+	target := UpstreamModelsURL(ProtocolOpenAI, base, v)
+	path := strings.TrimPrefix(target, strings.TrimRight(base, "/"))
+	if path == "" || path == target {
+		return nil
+	}
+	return &probeSpec{
+		Type:  ProtocolOpenAI,
+		Paths: []string{path},
+		Headers: func(key string) map[string]string {
+			return BuildUpstreamHeaders(ProtocolOpenAI, key, v)
+		},
+		Parse: parseOpenAIModels,
+	}
+}
+
+// reorderProbes 按优先级重排探测顺序：用户指定的协议优先，其余按常见度排列。
+func reorderProbes(all []probeSpec, hint string) []probeSpec {
 	ordered := make([]probeSpec, 0, len(all))
-	for _, p := range all {
-		if p.Type == hint {
-			ordered = append(ordered, p)
+	used := map[string]bool{}
+	pick := func(want string) {
+		for _, p := range all {
+			if p.Type == want && !used[p.Type] {
+				ordered = append(ordered, p)
+				used[p.Type] = true
+			}
 		}
 	}
+	if hint != "" {
+		pick(hint)
+	}
 	for _, p := range all {
-		if p.Type != hint {
+		if !used[p.Type] {
 			ordered = append(ordered, p)
+			used[p.Type] = true
 		}
 	}
 	return ordered
@@ -145,11 +180,18 @@ func ProbeUpstream(ctx context.Context, baseURL, apiKey, hint string) (*ProbeRes
 	}
 
 	client := NewUpstream(15 * time.Second)
+	// 按地址先猜一家厂商，把它特有的端点排到最前面试，省掉必然失败的试探：
+	// 例如填了 *.openai.azure.com 却先试 /models，必然 404 再回退。
+	profile := vendor.FromBaseURL(base)
+	order := protocolOrder(hint)
+	if custom := vendorProbeSpec(base, profile); custom != nil {
+		order = append([]probeSpec{*custom}, order...)
+	}
 	var lastErr error
 	// authErr 记录首个鉴权失败：鉴权失败往往是"协议不匹配"而非密钥错误
 	// （例如用 Bearer 请求 Gemini 上游必然 401），需继续试探其他协议。
 	var authErr error
-	for _, p := range protocolOrder(hint) {
+	for _, p := range order {
 		for _, path := range p.Paths {
 			target := base + path
 			if p.QueryKey {
@@ -174,13 +216,13 @@ func ProbeUpstream(ctx context.Context, baseURL, apiKey, hint string) (*ProbeRes
 			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 				if authErr == nil {
 					authErr = &ProbeError{Type: p.Type, Endpoint: target, Status: resp.StatusCode,
-						Message: ExtractUpstreamError(p.Type, body)}
+						Message: ExtractUpstreamError(p.Type, body, vendor.FromBaseURL(base))}
 				}
 				continue
 			}
 			if resp.StatusCode >= http.StatusBadRequest {
 				lastErr = &ProbeError{Type: p.Type, Endpoint: target, Status: resp.StatusCode,
-					Message: ExtractUpstreamError(p.Type, body)}
+					Message: ExtractUpstreamError(p.Type, body, vendor.FromBaseURL(base))}
 				continue
 			}
 			models, err := p.Parse(body)

@@ -14,6 +14,7 @@ import (
 	"github.com/whalegate/whalegate/internal/model"
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/crypto"
+	"github.com/whalegate/whalegate/internal/pkg/skills"
 )
 
 // encryptSetting 加密写入 app_settings 的敏感值（TLS 私钥等）。
@@ -106,6 +107,17 @@ type Settings struct {
 	AllowRegistration bool `json:"allow_registration"`
 	// VideoMaxSeconds 视频单次生成最大秒数。
 	VideoMaxSeconds int `json:"video_max_seconds"`
+
+	// ---------------------------------------------------------------- 技能导入
+
+	// SkillsMaxUploadMB 技能压缩包上传体积上限（MB）。
+	SkillsMaxUploadMB int `json:"skills_max_upload_mb"`
+	// SkillsMaxTotalMB 解压后的总字节数上限（MB），用于拦截压缩炸弹。
+	SkillsMaxTotalMB int `json:"skills_max_total_mb"`
+	// SkillsMaxFileMB 单个技能文件的大小上限（MB）。
+	SkillsMaxFileMB int `json:"skills_max_file_mb"`
+	// SkillsMaxEntries 压缩包内条目数上限。
+	SkillsMaxEntries int `json:"skills_max_entries"`
 }
 
 // 设置默认值。
@@ -116,6 +128,16 @@ const (
 	defaultVideoMaxSeconds = 20
 	// maxVideoSecondsPerRequest 视频单次最大秒数上限：更长的需求应拆镜头。
 	maxVideoSecondsPerRequest = 60
+
+	// 技能导入上限的默认值与硬上限，单位 MB。
+	defaultSkillsMaxUploadMB = 32
+	defaultSkillsMaxTotalMB  = 64
+	defaultSkillsMaxFileMB   = 4
+	defaultSkillsMaxEntries  = 5000
+	// maxSkillsMB 单项上限的天花板：再大就会在开始解析前先把内存吃满。
+	maxSkillsMB = 512
+	// maxSkillsEntries 条目数天花板。
+	maxSkillsEntries = 50000
 )
 
 // 设置缓存：转发链路高频读取，5 秒内复用快照，数据库异常时降级为上次快照。
@@ -147,7 +169,32 @@ func (c *Container) GetSettings(ctx context.Context) (*Settings, error) {
 		}
 		applySetting(&out, key, value)
 	}
+	// 没配过的项要回填默认值：管理端拿到 0 会以为上限是 0（等于禁止导入），
+	// 而运行期实际走的是兜底值，两边显示不一致会误导排查。
+	applySettingDefaults(&out)
 	return &out, nil
+}
+
+// applySettingDefaults 回填未配置项的默认值。
+func applySettingDefaults(s *Settings) {
+	if s.MCPMaxRounds <= 0 {
+		s.MCPMaxRounds = defaultMCPMaxRounds
+	}
+	if s.VideoMaxSeconds <= 0 {
+		s.VideoMaxSeconds = defaultVideoMaxSeconds
+	}
+	if s.SkillsMaxUploadMB <= 0 {
+		s.SkillsMaxUploadMB = defaultSkillsMaxUploadMB
+	}
+	if s.SkillsMaxTotalMB <= 0 {
+		s.SkillsMaxTotalMB = defaultSkillsMaxTotalMB
+	}
+	if s.SkillsMaxFileMB <= 0 {
+		s.SkillsMaxFileMB = defaultSkillsMaxFileMB
+	}
+	if s.SkillsMaxEntries <= 0 {
+		s.SkillsMaxEntries = defaultSkillsMaxEntries
+	}
 }
 
 // UpdateSettings 更新全局设置（仅管理员可调用）。
@@ -193,6 +240,11 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 	if in.VideoMaxSeconds > maxVideoSecondsPerRequest {
 		in.VideoMaxSeconds = maxVideoSecondsPerRequest
 	}
+	// 技能导入上限：未填或非法值回落默认，超出天花板则收敛到天花板。
+	in.SkillsMaxUploadMB = clampInt(in.SkillsMaxUploadMB, defaultSkillsMaxUploadMB, maxSkillsMB)
+	in.SkillsMaxTotalMB = clampInt(in.SkillsMaxTotalMB, defaultSkillsMaxTotalMB, maxSkillsMB)
+	in.SkillsMaxFileMB = clampInt(in.SkillsMaxFileMB, defaultSkillsMaxFileMB, maxSkillsMB)
+	in.SkillsMaxEntries = clampInt(in.SkillsMaxEntries, defaultSkillsMaxEntries, maxSkillsEntries)
 
 	// 通行密钥配置校验。
 	if in.PasskeyEnabled && strings.TrimSpace(in.PasskeyRPID) == "" {
@@ -232,6 +284,10 @@ func (c *Container) UpdateSettings(ctx context.Context, userID uint, in Settings
 		model.SettingParamPassthrough:       strconv.FormatBool(in.ParamPassthrough),
 		model.SettingAllowRegistration:      strconv.FormatBool(in.AllowRegistration),
 		model.SettingVideoMaxSeconds:        strconv.Itoa(in.VideoMaxSeconds),
+		model.SettingSkillsMaxUploadBytes:   strconv.FormatInt(mbToBytes(in.SkillsMaxUploadMB), 10),
+		model.SettingSkillsMaxTotalBytes:    strconv.FormatInt(mbToBytes(in.SkillsMaxTotalMB), 10),
+		model.SettingSkillsMaxFileBytes:     strconv.FormatInt(mbToBytes(in.SkillsMaxFileMB), 10),
+		model.SettingSkillsMaxEntries:       strconv.Itoa(in.SkillsMaxEntries),
 	}
 	for k, v := range values {
 		row := model.AppSetting{Key: k, Value: v, UpdatedBy: userID, UpdatedAt: now}
@@ -315,12 +371,8 @@ func (c *Container) Settings() Settings {
 		}
 		return snap
 	}
-	if cur.MCPMaxRounds <= 0 {
-		cur.MCPMaxRounds = defaultMCPMaxRounds
-	}
-	if cur.VideoMaxSeconds <= 0 {
-		cur.VideoMaxSeconds = defaultVideoMaxSeconds
-	}
+	// 未配置过技能上限时给默认值，避免解析包时拿到 0 而直接拒绝导入。
+	applySettingDefaults(cur)
 
 	settingsMu.Lock()
 	settingsSnap = *cur
@@ -335,6 +387,20 @@ func (c *Container) SelfUseMode() bool { return c.Settings().SelfUseMode }
 
 // ParamPassthrough 返回自定义参数透传是否开启。
 func (c *Container) ParamPassthrough() bool { return c.Settings().ParamPassthrough }
+
+// SkillsImportLimits 返回技能导入的体积与条目上限。
+//
+// 上限来自管理员配置而不是编译期常量：不同部署的技能包规模差异很大，
+// 写死会让「上传一个稍大的包」变成无法自助解决的问题。
+func (c *Container) SkillsImportLimits() skills.Limits {
+	s := c.Settings()
+	return skills.Limits{
+		MaxUploadBytes: mbToBytes(s.SkillsMaxUploadMB),
+		MaxTotalBytes:  mbToBytes(s.SkillsMaxTotalMB),
+		MaxFileBytes:   mbToBytes(s.SkillsMaxFileMB),
+		MaxEntries:     s.SkillsMaxEntries,
+	}
+}
 
 // RegistrationAllowed 返回是否开放注册。
 func (c *Container) RegistrationAllowed() bool { return c.Settings().AllowRegistration }
@@ -395,7 +461,50 @@ func applySetting(out *Settings, key, value string) {
 		if n, err := strconv.Atoi(value); err == nil && n > 0 {
 			out.VideoMaxSeconds = n
 		}
+	case model.SettingSkillsMaxUploadBytes:
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
+			out.SkillsMaxUploadMB = bytesToMB(n)
+		}
+	case model.SettingSkillsMaxTotalBytes:
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
+			out.SkillsMaxTotalMB = bytesToMB(n)
+		}
+	case model.SettingSkillsMaxFileBytes:
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
+			out.SkillsMaxFileMB = bytesToMB(n)
+		}
+	case model.SettingSkillsMaxEntries:
+		if n, err := strconv.Atoi(value); err == nil && n > 0 {
+			out.SkillsMaxEntries = n
+		}
 	}
+}
+
+// clampInt 把设置值收敛到 [1, max]，非正数或缺失时回落默认值。
+func clampInt(value, fallback, max int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+// mbToBytes / bytesToMB 在前端友好的 MB 与库内字节之间换算。
+// 换算向上取整，避免 1MB 被算成 0 导致「填了却读回 0」。
+func mbToBytes(mb int) int64 {
+	if mb <= 0 {
+		return 0
+	}
+	return int64(mb) << 20
+}
+
+func bytesToMB(n int64) int {
+	if n <= 0 {
+		return 0
+	}
+	return int((n + (1<<20 - 1)) >> 20)
 }
 
 // SettingsSnapshot 返回当前缓存快照，便于管理端快速展示与测试。

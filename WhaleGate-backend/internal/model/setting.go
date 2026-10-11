@@ -34,6 +34,17 @@ const (
 	// SettingVideoMaxSeconds 视频单次生成最大秒数。
 	SettingVideoMaxSeconds = "video_max_seconds"
 
+	// ---------------------------------------------------------------- 技能导入
+
+	// SettingSkillsMaxUploadBytes 技能压缩包上传体积上限（字节）。
+	SettingSkillsMaxUploadBytes = "skills_max_upload_bytes"
+	// SettingSkillsMaxTotalBytes 解压后的总字节数上限。
+	SettingSkillsMaxTotalBytes = "skills_max_total_bytes"
+	// SettingSkillsMaxFileBytes 单个技能文件的大小上限。
+	SettingSkillsMaxFileBytes = "skills_max_file_bytes"
+	// SettingSkillsMaxEntries 压缩包内条目数上限。
+	SettingSkillsMaxEntries = "skills_max_entries"
+
 	// ---------------------------------------------------------------- 绘图工作台存储
 
 	// SettingStudioStorageDriver 存储后端：local 本地磁盘 / s3 对象存储。

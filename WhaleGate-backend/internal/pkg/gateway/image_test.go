@@ -20,7 +20,7 @@ func TestSupportsImageGeneration(t *testing.T) {
 }
 
 func TestBuildImageUpstreamURL(t *testing.T) {
-	url, err := BuildImageUpstreamURL(ProtocolOpenAI, "https://api.example.com/v1/", "gpt-image-2")
+	url, err := BuildImageUpstreamURL(ProtocolOpenAI, "https://api.example.com/v1/", "gpt-image-2", nil)
 	if err != nil {
 		t.Fatalf("openai 地址拼装失败: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestBuildImageUpstreamURL(t *testing.T) {
 		t.Fatalf("openai 地址错误: %s", url)
 	}
 
-	url, err = BuildImageUpstreamURL(ProtocolGemini, "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash-image")
+	url, err = BuildImageUpstreamURL(ProtocolGemini, "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash-image", nil)
 	if err != nil {
 		t.Fatalf("gemini 地址拼装失败: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestBuildImageUpstreamURL(t *testing.T) {
 		t.Fatalf("gemini 地址错误: %s", url)
 	}
 
-	if _, err := BuildImageUpstreamURL(ProtocolAnthropic, "https://api.anthropic.com", "claude"); err == nil {
+	if _, err := BuildImageUpstreamURL(ProtocolAnthropic, "https://api.anthropic.com", "claude", nil); err == nil {
 		t.Fatal("anthropic 渠道应报错")
 	}
 }
@@ -53,7 +53,7 @@ func TestBuildImageRequestOpenAI(t *testing.T) {
 		ResponseFormat: ImageResponseFormatB64,
 		Extra:          map[string]interface{}{"seed": 42},
 	}
-	body, err := BuildImageRequest(ProtocolOpenAI, req, "upstream-image-model")
+	body, err := BuildImageRequest(ProtocolOpenAI, req, "upstream-image-model", nil)
 	if err != nil {
 		t.Fatalf("构建请求失败: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestBuildImageRequestOpenAI(t *testing.T) {
 }
 
 func TestBuildImageRequestGemini(t *testing.T) {
-	body, err := BuildImageRequest(ProtocolGemini, &ImageRequest{Prompt: "赛博朋克城市", N: 2}, "gemini-2.5-flash-image")
+	body, err := BuildImageRequest(ProtocolGemini, &ImageRequest{Prompt: "赛博朋克城市", N: 2}, "gemini-2.5-flash-image", nil)
 	if err != nil {
 		t.Fatalf("构建请求失败: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestBuildImageRequestGemini(t *testing.T) {
 }
 
 func TestBuildImageRequestRejectsEmptyPrompt(t *testing.T) {
-	if _, err := BuildImageRequest(ProtocolOpenAI, &ImageRequest{Prompt: "  "}, "m"); err == nil {
+	if _, err := BuildImageRequest(ProtocolOpenAI, &ImageRequest{Prompt: "  "}, "m", nil); err == nil {
 		t.Fatal("空提示词应报错")
 	}
 }
@@ -113,7 +113,7 @@ func TestParseOpenAIImagesWithURL(t *testing.T) {
 		],
 		"usage": {"input_tokens": 12, "output_tokens": 300, "total_tokens": 312}
 	}`)
-	resp, err := ParseImageResponse(ProtocolOpenAI, raw)
+	resp, err := ParseImageResponse(ProtocolOpenAI, raw, nil)
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestParseOpenAIImagesWithB64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造响应失败: %v", err)
 	}
-	resp, err := ParseImageResponse(ProtocolOpenAI, raw)
+	resp, err := ParseImageResponse(ProtocolOpenAI, raw, nil)
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestParseOpenAIImagesWithB64(t *testing.T) {
 }
 
 func TestParseOpenAIImagesEmpty(t *testing.T) {
-	if _, err := ParseImageResponse(ProtocolOpenAI, []byte(`{"data":[]}`)); err == nil {
+	if _, err := ParseImageResponse(ProtocolOpenAI, []byte(`{"data":[]}`), nil); err == nil {
 		t.Fatal("空结果应报错")
 	}
 }
@@ -186,7 +186,7 @@ func TestParseGeminiImages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造响应失败: %v", err)
 	}
-	resp, err := ParseImageResponse(ProtocolGemini, raw)
+	resp, err := ParseImageResponse(ProtocolGemini, raw, nil)
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestParseGeminiImages(t *testing.T) {
 
 func TestParseGeminiImagesOnlyText(t *testing.T) {
 	raw := []byte(`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"我无法生成图片"}]}}]}`)
-	_, err := ParseImageResponse(ProtocolGemini, raw)
+	_, err := ParseImageResponse(ProtocolGemini, raw, nil)
 	if err == nil {
 		t.Fatal("纯文本响应应报错")
 	}

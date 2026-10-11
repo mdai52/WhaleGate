@@ -91,6 +91,12 @@ func New(opts Options) (*App, error) {
 	app.Service.LoadTLSSettings(context.Background())
 	// 加载绘图工作台的图片存储后端（本地磁盘或对象存储），配置由管理员在后台维护。
 	app.Service.LoadStudioStorage(context.Background())
+	// 画布导出走服务端渲染，先按配置拉起有界的 worker 池，避免请求进来才开始并发失控。
+	app.Service.StartCanvasWorkers()
+	// 厂商适配档案在表里，启动时灌入内存；后台改动会自行重载。
+	if err := app.Service.LoadVendorProfiles(context.Background()); err != nil && lg != nil {
+		lg.Warn("载入厂商档案失败，识别将回落通用形态", zap.Error(err))
+	}
 
 	app.Engine = router.NewEngine(router.Deps{
 		Config:  cfg,

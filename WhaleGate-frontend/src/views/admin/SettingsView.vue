@@ -39,6 +39,10 @@ const settings = reactive<Settings>({
   param_passthrough: true,
   allow_registration: true,
   video_max_seconds: 20,
+  skills_max_upload_mb: 32,
+  skills_max_total_mb: 64,
+  skills_max_file_mb: 4,
+  skills_max_entries: 5000,
 })
 
 // 对象存储密钥为敏感字段，仅在编辑时暂存，绝不回填展示。
@@ -113,6 +117,32 @@ async function saveVideoMaxSeconds() {
     settings.video_max_seconds = 20
   }
   await applyChange({ video_max_seconds: settings.video_max_seconds }, '已保存视频单次最大秒数')
+}
+
+/** 技能导入上限：空值或非法时回落默认，写库前统一收敛一次 */
+async function saveSkillsLimits() {
+  const fallback = { upload: 32, total: 64, file: 4, entries: 5000 }
+  if (!settings.skills_max_upload_mb || settings.skills_max_upload_mb < 1) {
+    settings.skills_max_upload_mb = fallback.upload
+  }
+  if (!settings.skills_max_total_mb || settings.skills_max_total_mb < 1) {
+    settings.skills_max_total_mb = fallback.total
+  }
+  if (!settings.skills_max_file_mb || settings.skills_max_file_mb < 1) {
+    settings.skills_max_file_mb = fallback.file
+  }
+  if (!settings.skills_max_entries || settings.skills_max_entries < 1) {
+    settings.skills_max_entries = fallback.entries
+  }
+  await applyChange(
+    {
+      skills_max_upload_mb: settings.skills_max_upload_mb,
+      skills_max_total_mb: settings.skills_max_total_mb,
+      skills_max_file_mb: settings.skills_max_file_mb,
+      skills_max_entries: settings.skills_max_entries,
+    },
+    '已保存技能导入上限',
+  )
 }
 
 const pwd = reactive({
@@ -328,6 +358,60 @@ onMounted(load)
           @blur="saveVideoMaxSeconds"
         />
       </div>
+
+      <a-divider style="margin: 12px 0" />
+
+      <div class="wg-switch-row">
+        <div>
+          <div class="wg-switch-title">技能压缩包导入上限</div>
+          <div class="wg-muted">
+            上传体积、解压总量与单文件大小单位为 MB；解压总量用于拦截压缩炸弹，
+            条目数限制包内文件个数。调大前请确认实例内存足够（解析全程在内存中完成）
+          </div>
+        </div>
+      </div>
+      <a-row :gutter="[12, 12]" style="margin-top: 8px">
+        <a-col :xs="12" :sm="6">
+          <div class="wg-muted" style="margin-bottom: 4px">上传体积（MB）</div>
+          <a-input-number
+            v-model:value="settings.skills_max_upload_mb"
+            :min="1"
+            :max="512"
+            style="width: 100%"
+            @blur="saveSkillsLimits"
+          />
+        </a-col>
+        <a-col :xs="12" :sm="6">
+          <div class="wg-muted" style="margin-bottom: 4px">解压总量（MB）</div>
+          <a-input-number
+            v-model:value="settings.skills_max_total_mb"
+            :min="1"
+            :max="512"
+            style="width: 100%"
+            @blur="saveSkillsLimits"
+          />
+        </a-col>
+        <a-col :xs="12" :sm="6">
+          <div class="wg-muted" style="margin-bottom: 4px">单个文件（MB）</div>
+          <a-input-number
+            v-model:value="settings.skills_max_file_mb"
+            :min="1"
+            :max="512"
+            style="width: 100%"
+            @blur="saveSkillsLimits"
+          />
+        </a-col>
+        <a-col :xs="12" :sm="6">
+          <div class="wg-muted" style="margin-bottom: 4px">条目数</div>
+          <a-input-number
+            v-model:value="settings.skills_max_entries"
+            :min="1"
+            :max="50000"
+            style="width: 100%"
+            @blur="saveSkillsLimits"
+          />
+        </a-col>
+      </a-row>
     </a-card>
 
     <a-card title="通行密钥（Passkey）" :loading="loading" style="margin-top: 16px">

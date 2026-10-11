@@ -12,6 +12,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/gateway/anthropic"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/gemini"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/openai"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 )
 
 // ParseClientRequest 按客户端协议解析入站请求体。
@@ -31,21 +32,37 @@ func ParseClientRequest(clientProtocol string, raw []byte, model string) (*Unifi
 // ---------------------------------------------------------------- 上游侧
 
 // BuildUpstreamURL 按渠道协议拼装上游地址。
-func BuildUpstreamURL(channelType, baseURL, model string, stream bool) string {
+//
+// v 为厂商档案，承载 OpenAI 兼容厂商的端点差异：
+// Azure 的部署名路径、百炼的 compatible-mode 前缀、Ollama 的 /v1 前缀、
+// 以及 Azure 必带的 api-version 查询串。
+// 识别不出厂商时传入 nil 或 vendor.Generic()，行为与旧版一致。
+func BuildUpstreamURL(channelType, baseURL, model string, stream bool, v *vendor.Vendor) string {
 	base := strings.TrimRight(baseURL, "/")
-	switch {
-	case channelType == ProtocolGemini:
+	switch channelType {
+	case ProtocolGemini:
 		action := gemini.ActionGenerateContent
 		if stream {
 			action = gemini.ActionStreamGenerateContent + "?alt=sse"
 		}
 		return fmt.Sprintf("%s/models/%s:%s", base, model, action)
-	case IsAnthropicLike(channelType):
+	}
+	if IsAnthropicLike(channelType) {
 		// Anthropic 流式与非流式共用同一端点，流标记写在请求体里。
 		return anthropic.MessagesURL(baseURL)
-	default:
-		return base + "/chat/completions"
 	}
+	return appendQuery(base+v.ChatPathFor(baseURL, model), v.QueryOrDefault())
+}
+
+// appendQuery 把厂商要求的查询串接到地址上（已有查询串时用 & 连接）。
+func appendQuery(url, query string) string {
+	if query == "" {
+		return url
+	}
+	if strings.Contains(url, "?") {
+		return url + "&" + query
+	}
+	return url + "?" + query
 }
 
 // AnthropicModelsURL 返回 Anthropic 系渠道的模型列表地址，供连通性测试使用。
@@ -53,8 +70,20 @@ func AnthropicModelsURL(baseURL string) string {
 	return anthropic.ModelsURL(baseURL)
 }
 
-// BuildUpstreamAuthHeader 按渠道协议返回主鉴权头键值。
-func BuildUpstreamAuthHeader(channelType, apiKey string) (string, string) {
+// UpstreamModelsURL 返回渠道协议对应的模型列表地址，供自动探测与连通性测试使用。
+func UpstreamModelsURL(channelType, baseURL string, v *vendor.Vendor) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	switch channelType {
+	case ProtocolGemini:
+		return base + "/models"
+	case ProtocolAnthropic, ProtocolClaudeCode:
+		return anthropic.ModelsURL(baseURL)
+	}
+	return appendQuery(base+v.ModelsPathFor(baseURL), v.QueryOrDefault())
+}
+
+// BuildUpstreamAuthHeader 按渠道协议与厂商档案返回主鉴权头键值。
+func BuildUpstreamAuthHeader(channelType, apiKey string, v *vendor.Vendor) (string, string) {
 	if channelType == ProtocolGemini {
 		return "x-goog-api-key", apiKey
 	}
@@ -65,73 +94,96 @@ func BuildUpstreamAuthHeader(channelType, apiKey string) (string, string) {
 		}
 		return anthropic.APIKeyHeader, apiKey
 	}
+	if v != nil && v.AuthHeader != "" {
+		// raw 风格（Azure 的 api-key）头里直接放密钥，不套 Bearer 前缀。
+		if v.AuthStyleOrDefault() == vendor.AuthRaw {
+			return v.AuthHeaderOrDefault(), apiKey
+		}
+		return v.AuthHeaderOrDefault(), "Bearer " + apiKey
+	}
 	return "Authorization", "Bearer " + apiKey
 }
 
 // BuildUpstreamHeaders 返回发往上游所需的全部请求头（含协议版本头）。
 // 相比 BuildUpstreamAuthHeader，它还能携带 anthropic-version 这类必需附加头。
-func BuildUpstreamHeaders(channelType, apiKey string) map[string]string {
+func BuildUpstreamHeaders(channelType, apiKey string, v *vendor.Vendor) map[string]string {
+	return BuildUpstreamHeadersFor(channelType, apiKey, v, false)
+}
+
+// BuildUpstreamHeadersFor 同 BuildUpstreamHeaders，stream 为真时并入厂商的流式专用头。
+//
+// 之所以合并成一个入口：百炼这类厂商流式与非流式要求的头不同，
+// 分开两个函数很容易漏加，导致流式退化成一次性响应。
+func BuildUpstreamHeadersFor(channelType, apiKey string, v *vendor.Vendor, stream bool) map[string]string {
 	headers := map[string]string{}
 	if IsAnthropicLike(channelType) {
-		name, value := BuildUpstreamAuthHeader(channelType, apiKey)
+		name, value := BuildUpstreamAuthHeader(channelType, apiKey, v)
 		headers[name] = value
 		headers["anthropic-version"] = anthropic.APIVersion
 		return headers
 	}
-	name, value := BuildUpstreamAuthHeader(channelType, apiKey)
+	name, value := BuildUpstreamAuthHeader(channelType, apiKey, v)
 	headers[name] = value
+	if channelType != ProtocolGemini {
+		for k, val := range v.HeaderOverrides(stream) {
+			headers[k] = val
+		}
+	}
 	return headers
 }
 
 // BuildUpstreamRequest 把统一请求转换为指定协议的上游请求体。
-func BuildUpstreamRequest(channelType string, u *UnifiedRequest) (map[string]interface{}, error) {
-	switch {
-	case channelType == ProtocolGemini:
+func BuildUpstreamRequest(channelType string, u *UnifiedRequest, v *vendor.Vendor) (map[string]interface{}, error) {
+	switch channelType {
+	case ProtocolGemini:
 		return gemini.BuildRequest(u)
-	case IsAnthropicLike(channelType):
-		return anthropic.BuildRequest(u)
-	default:
-		return openai.BuildRequest(u)
 	}
+	if IsAnthropicLike(channelType) {
+		return anthropic.BuildRequest(u)
+	}
+	return openai.BuildRequestFor(u, v)
 }
 
 // ParseUpstreamResponse 解析指定协议的上游响应。
-func ParseUpstreamResponse(channelType string, raw []byte) (*UnifiedResponse, error) {
-	switch {
-	case channelType == ProtocolGemini:
+//
+// 千帆这类厂商同一个渠道可能同时挂着新版（choices[]）与老版（result）模型，
+// 因此 OpenAI 解析器按厂商档案决定是否回退到老版字段。
+func ParseUpstreamResponse(channelType string, raw []byte, v *vendor.Vendor) (*UnifiedResponse, error) {
+	switch channelType {
+	case ProtocolGemini:
 		return gemini.ParseResponse(raw)
-	case IsAnthropicLike(channelType):
-		return anthropic.ParseResponse(raw)
-	default:
-		return openai.ParseResponse(raw)
 	}
+	if IsAnthropicLike(channelType) {
+		return anthropic.ParseResponse(raw)
+	}
+	return openai.ParseResponseFor(raw, v)
 }
 
 // ParseUpstreamStreamEvent 解析指定协议的上游流式事件。
 //
 // 注意：Anthropic 的工具调用参数是跨事件分片的，单次调用无法还原完整参数，
 // 转发场景应使用 NewStreamDecoder 在整个流上持有同一个解码器。
-func ParseUpstreamStreamEvent(channelType string, payload []byte) (*StreamChunk, error) {
-	switch {
-	case channelType == ProtocolGemini:
+func ParseUpstreamStreamEvent(channelType string, payload []byte, v *vendor.Vendor) (*StreamChunk, error) {
+	switch channelType {
+	case ProtocolGemini:
 		return gemini.ParseStreamEvent(payload)
-	case IsAnthropicLike(channelType):
-		return anthropic.ParseStreamEvent(payload)
-	default:
-		return openai.ParseStreamEvent(payload)
 	}
+	if IsAnthropicLike(channelType) {
+		return anthropic.ParseStreamEvent(payload)
+	}
+	return openai.ParseStreamEventFor(payload, v)
 }
 
 // ExtractUpstreamError 从上游响应体提取错误信息。
-func ExtractUpstreamError(channelType string, raw []byte) string {
-	switch {
-	case channelType == ProtocolGemini:
+func ExtractUpstreamError(channelType string, raw []byte, v *vendor.Vendor) string {
+	switch channelType {
+	case ProtocolGemini:
 		return gemini.ExtractError(raw)
-	case IsAnthropicLike(channelType):
-		return anthropic.ExtractError(raw)
-	default:
-		return openai.ExtractError(raw)
 	}
+	if IsAnthropicLike(channelType) {
+		return anthropic.ExtractError(raw)
+	}
+	return openai.ExtractErrorFor(raw, v)
 }
 
 // ---------------------------------------------------------------- 客户端侧

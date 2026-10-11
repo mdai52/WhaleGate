@@ -36,7 +36,14 @@ export const channelApi = {
   },
   /** 连通性测试：拉取上游模型列表，不消耗 token */
   test(id: number) {
-    return request<{ status: number; latency_ms: number }>({
+    return request<{
+      status: number
+      latency_ms: number
+      /** 测试后的渠道状态：1 启用 / 2 手动停用 / 3 自动熔断 */
+      channel_status: number
+      /** 之前被自动熔断、本次测试通过后已恢复启用 */
+      restored: boolean
+    }>({
       url: `/admin/channels/${id}/test`,
       method: 'POST',
     })

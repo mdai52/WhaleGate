@@ -16,6 +16,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 	"github.com/whalegate/whalegate/internal/pkg/util"
 	"github.com/whalegate/whalegate/internal/service"
 )
@@ -128,8 +129,10 @@ func (h *EmbeddingsHandler) Embeddings(c *gin.Context) {
 	}
 
 	upstream := gateway.NewUpstream(channelTimeout(h.svc, channel))
-	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, false)
-	resp, err := upstream.Do(ctx, http.MethodPost, url, gateway.BuildUpstreamHeaders(channel.Type, apiKey), requestBody)
+	vendorProfile := vendor.FromBaseURL(channel.BaseURL)
+	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, false, vendorProfile)
+	resp, err := upstream.Do(ctx, http.MethodPost, url,
+		gateway.BuildUpstreamHeaders(channel.Type, apiKey, vendorProfile), requestBody)
 	if err != nil {
 		h.reject(c, modelName, start, selfUse, reservation, classifyUpstreamError(err))
 		return
@@ -143,7 +146,7 @@ func (h *EmbeddingsHandler) Embeddings(c *gin.Context) {
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		h.reject(c, modelName, start, selfUse, reservation,
-			upstreamHTTPError(channel.Type, resp.StatusCode, raw))
+			upstreamHTTPError(channel.Type, vendorProfile, resp.StatusCode, raw))
 		return
 	}
 

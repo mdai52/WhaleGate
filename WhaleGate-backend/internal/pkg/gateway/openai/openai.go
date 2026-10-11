@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 )
 
 // ObjectChatCompletion 非流式响应对象名。
@@ -49,11 +50,13 @@ type Message struct {
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
 	// ReasoningContent 思维链正文：Qwen3 等思考模型把推理过程放这里、content 留空。
-	// 深度求索 / OpenRouter 等生态同样使用该扩展字段。
+	// 深度求索 / 通义 / 智谱 / 硅基流动等国内厂商与 vLLM 都用它。
 	ReasoningContent string `json:"reasoning_content,omitempty"`
-	// Reasoning vLLM 新版（>=0.27）使用的同义字段，与 reasoning_content 二选一出现。
-	Reasoning string      `json:"reasoning,omitempty"`
-	Images    []ImagePart `json:"images,omitempty"`
+	// Reasoning OpenRouter / Groq 使用的同义字段。
+	Reasoning string `json:"reasoning,omitempty"`
+	// Thinking Ollama 与部分本地推理栈使用的同义字段。
+	Thinking string      `json:"thinking,omitempty"`
+	Images   []ImagePart `json:"images,omitempty"`
 }
 
 // ImagePart OpenRouter 风格的图片片段。
@@ -117,6 +120,10 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// InputTokens / OutputTokens 通义百炼、部分聚合平台的同义字段。
+	// 与 prompt/completion 二选一出现，解析时按「谁非零取谁」归一。
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 	// CompletionTokensDetails OpenAI 扩展：思维链 token 明细。
 	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
@@ -259,6 +266,15 @@ func extractExtraParams(raw []byte, known map[string]struct{}) map[string]interf
 
 // BuildRequest 把统一请求转换为发往 OpenAI 上游的请求体。
 func BuildRequest(u *spec.UnifiedRequest) (map[string]interface{}, error) {
+	return BuildRequestFor(u, nil)
+}
+
+// BuildRequestFor 按厂商档案构造请求体。
+//
+// 两处细节各家并不一致：
+//   - 输出上限字段名：OpenAI 的 o 系列与 gpt-5 只认 max_completion_tokens；
+//   - stream_options：部分平台不认这个字段，下发即 400，只能不下发、改用估算计量。
+func BuildRequestFor(u *spec.UnifiedRequest, v *vendor.Vendor) (map[string]interface{}, error) {
 	if u == nil {
 		return nil, fmt.Errorf("请求为空")
 	}
@@ -276,8 +292,8 @@ func BuildRequest(u *spec.UnifiedRequest) (map[string]interface{}, error) {
 	if u.TopP != nil {
 		body["top_p"] = *u.TopP
 	}
-	if u.MaxTokens != nil {
-		body["max_tokens"] = *u.MaxTokens
+	if u.MaxTokens != nil && *u.MaxTokens > 0 {
+		body[v.MaxTokensField()] = *u.MaxTokens
 	}
 	if len(u.Stop) > 0 {
 		body["stop"] = u.Stop
@@ -303,7 +319,8 @@ func BuildRequest(u *spec.UnifiedRequest) (map[string]interface{}, error) {
 		}
 		body["tools"] = tools
 	}
-	if u.Stream {
+	// 上游不认 stream_options 时不能下发：宁可少一份精确 usage，也不要一次 400。
+	if u.Stream && v.SupportsStreamUsage() {
 		body["stream_options"] = map[string]interface{}{"include_usage": true}
 	}
 	return body, nil
@@ -361,6 +378,15 @@ func buildMessages(messages []spec.Message) []map[string]interface{} {
 
 // ParseResponse 解析 OpenAI 非流式响应。
 func ParseResponse(raw []byte) (*spec.UnifiedResponse, error) {
+	return ParseResponseFor(raw, nil)
+}
+
+// ParseResponseFor 按厂商档案解析非流式响应：
+// 思维链字段名与 usage 口径各家不同，统一在这里归一。
+//
+// 千帆这类厂商同一个渠道可能同时挂着新版（choices[]）与老版（result）模型，
+// 因此标准解析拿不到候选时要按档案回退到老版字段。
+func ParseResponseFor(raw []byte, v *vendor.Vendor) (*spec.UnifiedResponse, error) {
 	var resp Response
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("解析 OpenAI 响应失败: %w", err)
@@ -378,27 +404,103 @@ func ParseResponse(raw []byte) (*spec.UnifiedResponse, error) {
 	for _, c := range resp.Choices {
 		out.Choices = append(out.Choices, spec.Choice{
 			Index:        c.Index,
-			Message:      toUnifiedMessage(c.Message),
+			Message:      toUnifiedMessageFor(c.Message, v),
 			FinishReason: c.FinishReason,
 		})
 	}
 	if resp.Usage != nil {
 		out.Usage = convertUsage(resp.Usage)
 	}
-	if len(out.Choices) == 0 && out.Usage == nil {
-		return nil, fmt.Errorf("上游响应缺少 choices 与 usage")
+	// 老版响应同样带 usage，只检查「有没有 choices」不够，
+	// 否则会返回一个带用量却没有正文的空响应。
+	if len(out.Choices) == 0 {
+		if v != nil && v.ResponseStyle() == vendor.ResponseLegacy {
+			if legacy := parseLegacyResponse(raw); legacy != nil {
+				return legacy, nil
+			}
+		}
+		if out.Usage == nil {
+			return nil, fmt.Errorf("上游响应缺少 choices 与 usage")
+		}
+		return nil, fmt.Errorf("上游响应缺少 choices")
 	}
 	return out, nil
 }
 
+// legacyResponse 老版响应结构：正文在 result，错误在 error_code/error_msg。
+//
+// 百度千帆的 wenxinworkshop 系列端点就是这种形态，
+// 与 v2 的 OpenAI 兼容端点共用同一个密钥，因此同一个渠道可能两种都遇到。
+type legacyResponse struct {
+	ID               string `json:"id"`
+	Object           string `json:"object"`
+	Created          int64  `json:"created"`
+	Result           string `json:"result"`
+	IsTruncated      bool   `json:"is_truncated"`
+	FinishReason     string `json:"finish_reason"`
+	NeedClearHistory bool   `json:"need_clear_history"`
+	Usage            *Usage `json:"usage"`
+	ErrorCode        int    `json:"error_code"`
+	ErrorMsg         string `json:"error_msg"`
+}
+
+// parseLegacyResponse 解析老版响应，解析不出内容时返回 nil 交由调用方报错。
+func parseLegacyResponse(raw []byte) *spec.UnifiedResponse {
+	var resp legacyResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil
+	}
+	if resp.ErrorCode != 0 || resp.ErrorMsg != "" {
+		return nil
+	}
+	if strings.TrimSpace(resp.Result) == "" {
+		return nil
+	}
+	out := &spec.UnifiedResponse{
+		ID:      resp.ID,
+		Object:  firstNonEmpty(resp.Object, ObjectChatCompletion),
+		Created: resp.Created,
+		Choices: []spec.Choice{{
+			Index:        0,
+			Message:      spec.Message{Role: spec.RoleAssistant, Content: resp.Result},
+			FinishReason: legacyFinishReason(resp.FinishReason, resp.IsTruncated),
+		}},
+	}
+	if resp.Usage != nil {
+		out.Usage = convertUsage(resp.Usage)
+	}
+	return out
+}
+
+// legacyFinishReason 老版的 normal / stop 都对应 stop；
+// 被截断时上游常常不给 finish_reason，只置 is_truncated。
+func legacyFinishReason(reason string, truncated bool) *string {
+	if truncated {
+		return spec.FinishReasonPtr(spec.FinishLength)
+	}
+	switch strings.TrimSpace(reason) {
+	case "", "normal", "stop":
+		return spec.FinishReasonPtr(spec.FinishStop)
+	case "length":
+		return spec.FinishReasonPtr(spec.FinishLength)
+	case "function_call", "tool_calls":
+		return spec.FinishReasonPtr(spec.FinishToolCalls)
+	default:
+		return spec.FinishReasonPtr(reason)
+	}
+}
+
 // convertUsage 归一 usage，并抽取 completion_tokens_details.reasoning_tokens。
+//
+// input_tokens / output_tokens 是百炼与部分聚合平台的命名，
+// 与 prompt/completion 语义等价，按「谁非零取谁」合并。
 func convertUsage(u *Usage) *spec.Usage {
 	if u == nil {
 		return nil
 	}
 	out := &spec.Usage{
-		PromptTokens:     u.PromptTokens,
-		CompletionTokens: u.CompletionTokens,
+		PromptTokens:     firstNonZero(u.PromptTokens, u.InputTokens),
+		CompletionTokens: firstNonZero(u.CompletionTokens, u.OutputTokens),
 		TotalTokens:      u.TotalTokens,
 	}
 	if u.CompletionTokensDetails != nil {
@@ -409,6 +511,14 @@ func convertUsage(u *Usage) *spec.Usage {
 }
 
 func toUnifiedMessage(m Message) spec.Message {
+	return toUnifiedMessageFor(m, nil)
+}
+
+// toUnifiedMessageFor 按厂商档案取思维链正文。
+//
+// 同一个「思考过程」在生态里有三种字段名，取错就只剩一条空回复；
+// 按厂商命名字段优先、其余作为兜底，可以在厂商换字段名时仍然可用。
+func toUnifiedMessageFor(m Message, v *vendor.Vendor) spec.Message {
 	images := convertImageParts(m.Images)
 	images = append(images, contentToImages(m.Content)...)
 	if len(images) == 0 {
@@ -420,12 +530,24 @@ func toUnifiedMessage(m Message) spec.Message {
 		Name:       m.Name,
 		ToolCallID: m.ToolCallID,
 		ToolCalls:  convertToolCalls(m.ToolCalls),
-		Reasoning:  firstNonEmpty(m.ReasoningContent, m.Reasoning),
+		Reasoning:  reasoningOf(v, m),
 		Images:     images,
 	}
 }
 
-// firstNonEmpty 返回第一个非空字符串；思考模型的思维链字段有两种命名，
+// reasoningOf 按厂商偏好的字段名取思维链，其余命名作为兜底。
+func reasoningOf(v *vendor.Vendor, m Message) string {
+	switch v.ReasoningField() {
+	case vendor.ReasoningPlain:
+		return firstNonEmpty(m.Reasoning, m.ReasoningContent, m.Thinking)
+	case vendor.ReasoningThinking:
+		return firstNonEmpty(m.Thinking, m.ReasoningContent, m.Reasoning)
+	default:
+		return firstNonEmpty(m.ReasoningContent, m.Reasoning, m.Thinking)
+	}
+}
+
+// firstNonEmpty 返回第一个非空字符串；思考模型的思维链字段有多种命名，
 // 上游用哪个取决于其推理解析器版本。
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
@@ -434,6 +556,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// firstNonZero 返回第一个非零值，用于合并等价但命名不同的 usage 字段。
+func firstNonZero(values ...int) int {
+	for _, v := range values {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 // convertImageParts 把 OpenRouter 扩展的 message.images[] 归一为统一图片结构。
@@ -581,6 +713,11 @@ func buildUsage(u *spec.Usage) map[string]interface{} {
 
 // ParseStreamEvent 解析单个 SSE data 载荷（不含 data: 前缀）。
 func ParseStreamEvent(payload []byte) (*spec.StreamChunk, error) {
+	return ParseStreamEventFor(payload, nil)
+}
+
+// ParseStreamEventFor 按厂商档案解析流式事件（思维链字段名随厂商变化）。
+func ParseStreamEventFor(payload []byte, v *vendor.Vendor) (*spec.StreamChunk, error) {
 	payload = bytes.TrimSpace(payload)
 	if len(payload) == 0 || bytes.Equal(payload, []byte(DoneSentinel)) {
 		return nil, nil
@@ -600,20 +737,18 @@ func ParseStreamEvent(payload []byte) (*spec.StreamChunk, error) {
 		Model:   chunk.Model,
 		Created: chunk.Created,
 	}
-	for i, c := range chunk.Choices {
-		index := c.Index
+	for _, c := range chunk.Choices {
 		out.Choices = append(out.Choices, spec.StreamChoice{
-			Index: index,
+			Index: c.Index,
 			Delta: spec.Delta{
 				Role:      c.Delta.Role,
 				Content:   contentToString(c.Delta.Content),
 				ToolCalls: convertToolCalls(c.Delta.ToolCalls),
-				Reasoning: firstNonEmpty(c.Delta.ReasoningContent, c.Delta.Reasoning),
+				Reasoning: reasoningOf(v, c.Delta),
 				Images:    convertImageParts(c.Delta.Images),
 			},
 			FinishReason: c.FinishReason,
 		})
-		_ = i
 	}
 	if chunk.Usage != nil {
 		out.Usage = convertUsage(chunk.Usage)
@@ -701,15 +836,64 @@ func ErrorResponse(message, errType string) map[string]interface{} {
 
 // ExtractError 从上游响应体中提取错误信息。
 func ExtractError(raw []byte) string {
+	return ExtractErrorFor(raw, nil)
+}
+
+// ExtractErrorFor 按厂商风格提取错误信息。
+//
+// 错误文案是排障的唯一线索，取不到时用户只能看到「上游返回 400」。
+// 兼容生态至少有四种外壳，这里按厂商声明的顺序逐个试探。
+func ExtractErrorFor(raw []byte, v *vendor.Vendor) string {
+	style := v.ErrorStyle()
+	// OpenAI 标准外壳：{"error":{"message":..}}。绝大多数厂商沿用，先试它。
 	var resp Response
-	if err := json.Unmarshal(raw, &resp); err == nil && resp.Error != nil {
+	if err := json.Unmarshal(raw, &resp); err == nil && resp.Error != nil && resp.Error.Message != "" {
 		return resp.Error.Message
 	}
 	var single struct {
 		Error *Error `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &single); err == nil && single.Error != nil {
+	if err := json.Unmarshal(raw, &single); err == nil && single.Error != nil && single.Error.Message != "" {
 		return single.Error.Message
+	}
+	switch style {
+	case vendor.ErrorBaidu:
+		// 文心：{"error_code":336000,"error_msg":"..."}
+		var baidu struct {
+			ErrorCode int    `json:"error_code"`
+			ErrorMsg  string `json:"error_msg"`
+		}
+		if err := json.Unmarshal(raw, &baidu); err == nil && baidu.ErrorMsg != "" {
+			if baidu.ErrorCode != 0 {
+				return fmt.Sprintf("%d: %s", baidu.ErrorCode, baidu.ErrorMsg)
+			}
+			return baidu.ErrorMsg
+		}
+	case vendor.ErrorDashScope, vendor.ErrorXfyun:
+		// 百炼 / 讯飞：顶层 {"code":..,"message":..}
+		var coded struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &coded); err == nil && coded.Message != "" {
+			if coded.Code != "" {
+				return coded.Code + ": " + coded.Message
+			}
+			return coded.Message
+		}
+	}
+	// 最后兜底：顶层 message / msg 字段（部分聚合平台）。
+	var flat struct {
+		Message string `json:"message"`
+		Msg     string `json:"msg"`
+	}
+	if err := json.Unmarshal(raw, &flat); err == nil {
+		if flat.Message != "" {
+			return flat.Message
+		}
+		if flat.Msg != "" {
+			return flat.Msg
+		}
 	}
 	return ""
 }

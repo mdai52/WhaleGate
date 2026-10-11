@@ -465,9 +465,17 @@ async function submit() {
 async function testChannel(row: Channel) {
   try {
     const res = await channelApi.test(row.id)
-    message.success(`连通正常，HTTP ${res.status}，延迟 ${res.latency_ms}ms`)
-  } catch {
-    message.error('连通性测试失败，渠道已自动暂停')
+    if (res.restored) {
+      // 之前被自动熔断的渠道，测试通过后已恢复，要明确说出来
+      message.success(`连通正常，HTTP ${res.status}，延迟 ${res.latency_ms}ms；渠道已恢复启用`)
+    } else if (res.channel_status === 2) {
+      // 人工停用是管理员的明确意图，测试通过也不擅自打开，但要提醒
+      message.success(`连通正常，HTTP ${res.status}，延迟 ${res.latency_ms}ms；渠道仍为手动停用，需要启用请编辑渠道`)
+    } else {
+      message.success(`连通正常，HTTP ${res.status}，延迟 ${res.latency_ms}ms`)
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '连通性测试失败，渠道已自动暂停')
   } finally {
     await load()
   }

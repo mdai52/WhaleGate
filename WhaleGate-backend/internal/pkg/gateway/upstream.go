@@ -100,6 +100,15 @@ func (u *Upstream) DoStream(ctx context.Context, method, url string, headers map
 // 流式请求是直接读上游响应体的，必须自己设上限（非流式路径都有 io.LimitReader 兜底）。
 const maxSSEEventSize = 1 << 20
 
+// StreamScanner 读取上游流。
+//
+// 所有走 OpenAI 协议的上游都用 SSE（data: 前缀 + 空行分隔），
+// 因此转发层只需要一种分帧实现。
+type StreamScanner interface {
+	// Next 返回下一段载荷，流结束时返回 io.EOF。
+	Next() ([]byte, error)
+}
+
 // SSEScanner 逐事件读取 SSE 流，兼容 \n\n 与 \r\n\r\n 两种分隔。
 type SSEScanner struct {
 	reader *bufio.Reader

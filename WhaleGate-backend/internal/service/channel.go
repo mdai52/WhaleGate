@@ -18,6 +18,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/crypto"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 )
 
 // ChannelInput 渠道创建/更新入参。
@@ -388,16 +389,12 @@ func (c *Container) TestChannel(ctx context.Context, ch *model.Channel) (map[str
 		return nil, err
 	}
 
-	url := strings.TrimRight(ch.BaseURL, "/")
-	headers := gateway.BuildUpstreamHeaders(ch.Type, key)
-	switch {
-	case ch.Type == model.ChannelTypeGemini:
-		url += "/models?key=" + urlpkg.QueryEscape(key)
-	case gateway.IsAnthropicLike(ch.Type):
-		// Anthropic 的地址可能带或不带 /v1 前缀，按约定补全。
-		url = gateway.AnthropicModelsURL(ch.BaseURL)
-	default:
-		url += "/models"
+	headers := gateway.BuildUpstreamHeaders(ch.Type, key, vendor.FromBaseURL(ch.BaseURL))
+	// 各家模型列表端点不同：Ollama 是 /api/tags、Azure 带 api-version、
+	// 百炼原生协议没有对等端点只能借用兼容端点，统一交给 UpstreamModelsURL 处理。
+	url := gateway.UpstreamModelsURL(ch.Type, ch.BaseURL, vendor.FromBaseURL(ch.BaseURL))
+	if ch.Type == model.ChannelTypeGemini {
+		url += "?key=" + urlpkg.QueryEscape(key)
 	}
 
 	timeout := time.Duration(ch.TimeoutSeconds) * time.Second
@@ -415,19 +412,55 @@ func (c *Container) TestChannel(ctx context.Context, ch *model.Channel) (map[str
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	if resp.StatusCode >= http.StatusBadRequest {
-		msg := gateway.ExtractUpstreamError(ch.Type, body)
+		msg := gateway.ExtractUpstreamError(ch.Type, body, vendor.FromBaseURL(ch.BaseURL))
 		if msg == "" {
 			msg = string(body)
 		}
 		c.disableChannelOnTestFailure(ctx, ch, msg)
 		return nil, apierr.Errorf(apierr.ErrUpstream, "连通性测试失败（HTTP %d），渠道已自动禁用：%s", resp.StatusCode, truncate(msg, 300))
 	}
-	c.RecordChannelSuccess(ctx, ch)
+	c.restoreChannelOnTestSuccess(ctx, ch)
 
 	return map[string]interface{}{
 		"status":     resp.StatusCode,
 		"latency_ms": time.Since(start).Milliseconds(),
+		// 告知前端当前渠道状态：人工停用的渠道测试通过也不会被擅自打开。
+		"channel_status": ch.Status,
+		"restored":       ch.Status == model.ChannelStatusEnabled,
 	}, nil
+}
+
+// restoreChannelOnTestSuccess 测试通过后恢复渠道。
+//
+// 测试失败会把渠道置为自动熔断，如果测试通过却不恢复，
+// 管理员改对地址后重测看到「连通正常」但渠道仍是停用，会以为改动没生效。
+// 只恢复自动熔断的：人工停用是管理员的明确意图，不因一次测试成功而推翻。
+func (c *Container) restoreChannelOnTestSuccess(ctx context.Context, ch *model.Channel) {
+	if ch == nil {
+		return
+	}
+	restored := false
+	patch := map[string]interface{}{"fail_count": 0, "last_error": ""}
+	if ch.Status == model.ChannelStatusAutoDisabled {
+		patch["status"] = model.ChannelStatusEnabled
+		patch["disabled_at"] = nil
+		ch.Status = model.ChannelStatusEnabled
+		restored = true
+	}
+	ch.FailCount = 0
+	ch.LastError = ""
+	if err := c.DB.WithContext(ctx).Model(&model.Channel{}).Where("id = ?", ch.ID).Updates(patch).Error; err != nil {
+		if c.Logger != nil {
+			c.Logger.Warn("测试通过后恢复渠道失败", zap.Uint("channel_id", ch.ID), zap.Error(err))
+		}
+		return
+	}
+	if restored {
+		c.invalidateChannelCache()
+		if c.Logger != nil {
+			c.Logger.Info("渠道测试通过已恢复启用", zap.Uint("channel_id", ch.ID), zap.String("channel", ch.Name))
+		}
+	}
 }
 
 // disableChannelOnTestFailure 测试失败时立即禁用渠道并清理缓存。

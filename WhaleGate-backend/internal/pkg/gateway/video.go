@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 )
 
 // videoModelKeywords 视频生成模型名关键词，用于从模型目录里识别可用模型。
@@ -25,8 +26,9 @@ var videoModelKeywords = []string{
 
 // SupportsVideoGeneration 判断渠道协议是否具备视频生成能力。
 //
-// 目前只认 OpenAI 兼容的 /v1/videos（Sora 风格）——各家聚合平台基本都按这个形态
-// 提供视频生成。Gemini 的 Veo 需要 predictLongRunning 这套独立接口，Anthropic 不提供，
+// 只认 OpenAI 兼容的 /v1/videos（Sora 风格）与百炼原生端点——各家聚合平台基本都按
+// 前者的形态提供视频生成，百炼则走自己的异步任务接口。
+// Gemini 的 Veo 需要 predictLongRunning 这套独立接口，Anthropic 不提供，
 // 明确报错比让上游返回 404 更易排查。
 func SupportsVideoGeneration(channelType string) bool {
 	return channelType == ProtocolOpenAI
@@ -52,22 +54,24 @@ func IsVideoModel(id string) bool {
 const (
 	videoStyleOpenAI = "openai"
 	videoStyleZhipu  = "zhipu"
+	// videoStyleDashScope 百炼（万相）：提交走 video-synthesis，查询走 /api/v1/tasks。
+	videoStyleDashScope = "dashscope"
+	// videoStyleArk 火山方舟（Seedance）：提交与查询都是 contents/generations/tasks。
+	videoStyleArk = "ark"
 )
 
 // videoEndpointStyle 按上游地址判断视频端点风格。
 //
 // 渠道协议（openai / gemini / anthropic）描述的是聊天协议，无法据此区分视频端点：
-// 智谱的聊天是 OpenAI 兼容的，视频却是另一套。因此按上游地址识别——
-// 新增平台时在这里加一条即可。
+// 智谱的聊天是 OpenAI 兼容的，视频却是另一套。因此按上游地址识别厂商再取其端点风格——
+// 新增平台时在 vendor 档案里加一条即可，这里不用改。
 //
 //	Sora 风格：POST /videos，GET /videos/{id}，内容走 /videos/{id}/content
 //	智谱风格：POST /videos/generations，GET /async-result/{id}，结果直接返回视频 URL
+//	百炼风格：POST /api/v1/services/aigc/video-generation/video-synthesis，GET /api/v1/tasks/{id}
+//	方舟风格：POST /api/v3/contents/generations/tasks，GET /api/v3/contents/generations/tasks/{id}
 func videoEndpointStyle(baseURL string) string {
-	host := strings.ToLower(baseURL)
-	if strings.Contains(host, "bigmodel.cn") {
-		return videoStyleZhipu
-	}
-	return videoStyleOpenAI
+	return vendor.FromBaseURL(baseURL).VideoStyle()
 }
 
 // BuildVideoSubmitURL 提交生成的端点。
@@ -79,10 +83,16 @@ func BuildVideoSubmitURL(channelType, baseURL string) (string, error) {
 	if !SupportsVideoGeneration(channelType) {
 		return "", fmt.Errorf("渠道协议 %s 不支持视频生成", channelType)
 	}
-	if videoEndpointStyle(baseURL) == videoStyleZhipu {
+	switch videoEndpointStyle(baseURL) {
+	case videoStyleZhipu:
 		return base + "/videos/generations", nil
+	case videoStyleDashScope:
+		return base + "/api/v1/services/aigc/video-generation/video-synthesis", nil
+	case videoStyleArk:
+		return base + "/api/v3/contents/generations/tasks", nil
+	default:
+		return base + "/videos", nil
 	}
-	return base + "/videos", nil
 }
 
 // BuildVideoStatusURL 查询任务状态的端点。
@@ -97,16 +107,23 @@ func BuildVideoStatusURL(channelType, baseURL, taskID string) (string, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return "", fmt.Errorf("缺少上游任务 ID")
 	}
-	if videoEndpointStyle(baseURL) == videoStyleZhipu {
+	switch videoEndpointStyle(baseURL) {
+	case videoStyleZhipu:
 		return base + "/async-result/" + taskID, nil
+	case videoStyleDashScope:
+		return base + "/api/v1/tasks/" + taskID, nil
+	case videoStyleArk:
+		return base + "/api/v3/contents/generations/tasks/" + taskID, nil
+	default:
+		return base + "/videos/" + taskID, nil
 	}
-	return base + "/videos/" + taskID, nil
 }
 
 // BuildVideoContentURL 拉取生成内容的端点。
 func BuildVideoContentURL(channelType, baseURL, taskID string) (string, error) {
-	if videoEndpointStyle(baseURL) == videoStyleZhipu {
-		// 智谱没有独立的内容端点：结果随任务状态一起返回视频 URL，
+	switch videoEndpointStyle(baseURL) {
+	case videoStyleZhipu, videoStyleDashScope, videoStyleArk:
+		// 这三家都没有独立的内容端点：结果随任务状态一起返回视频 URL，
 		// 走到这里说明上游既没给 URL 也没给内容，只能报错。
 		return "", fmt.Errorf("该上游不在任务响应里返回内容，也没有独立的内容端点")
 	}
@@ -120,7 +137,10 @@ func BuildVideoContentURL(channelType, baseURL, taskID string) (string, error) {
 // ---------------------------------------------------------------- 请求 / 响应
 
 // BuildVideoRequest 把统一视频请求转换为上游请求体，model 为映射后的上游模型名。
-func BuildVideoRequest(channelType string, req *spec.VideoRequest, model string) (map[string]interface{}, error) {
+//
+// baseURL 参与端点风格判断：百炼与火山方舟的请求体和 Sora 风格差别很大，
+// 只凭协议类型（都是 openai 兼容）无法区分，必须看上游是谁。
+func BuildVideoRequest(channelType, baseURL string, req *spec.VideoRequest, model string) (map[string]interface{}, error) {
 	if req == nil {
 		return nil, fmt.Errorf("请求为空")
 	}
@@ -133,7 +153,88 @@ func BuildVideoRequest(channelType string, req *spec.VideoRequest, model string)
 	if !SupportsVideoGeneration(channelType) {
 		return nil, fmt.Errorf("渠道协议 %s 不支持视频生成", channelType)
 	}
-	return buildOpenAIVideoRequest(req, model), nil
+	switch videoEndpointStyle(baseURL) {
+	case videoStyleDashScope:
+		return buildDashScopeVideoRequest(req, model), nil
+	case videoStyleArk:
+		return buildArkVideoRequest(req, model), nil
+	default:
+		return buildOpenAIVideoRequest(req, model), nil
+	}
+}
+
+// buildDashScopeVideoRequest 构造百炼万相的视频合成请求体。
+//
+// 百炼把提示词放在 input、把参数放在 parameters，与 Sora 的扁平结构不同。
+func buildDashScopeVideoRequest(req *spec.VideoRequest, model string) map[string]interface{} {
+	body := map[string]interface{}{
+		"model": model,
+		"input": map[string]interface{}{"prompt": req.Prompt},
+	}
+	parameters := map[string]interface{}{}
+	for k, v := range req.Extra {
+		if v == nil {
+			continue
+		}
+		parameters[k] = v
+	}
+	if req.Seconds > 0 {
+		parameters["duration"] = req.Seconds
+	}
+	if req.Size != "" {
+		// 百炼用 1280*720 这种乘号分隔写法。
+		parameters["size"] = strings.ReplaceAll(req.Size, "x", "*")
+	}
+	if req.Seed != nil {
+		parameters["seed"] = *req.Seed
+	}
+	if req.Image != "" {
+		// 图生视频：首帧作为参考图传入。
+		input := body["input"].(map[string]interface{})
+		input["img_url"] = req.Image
+	}
+	if len(parameters) > 0 {
+		body["parameters"] = parameters
+	}
+	return body
+}
+
+// buildArkVideoRequest 构造火山方舟的视频生成请求体。
+//
+// 方舟用 content 数组承载输入（文本/图片统一），参数放在 parameters。
+func buildArkVideoRequest(req *spec.VideoRequest, model string) map[string]interface{} {
+	body := map[string]interface{}{
+		"model":   model,
+		"content": []map[string]interface{}{{"type": "text", "text": req.Prompt}},
+	}
+	parameters := map[string]interface{}{}
+	for k, v := range req.Extra {
+		if v == nil {
+			continue
+		}
+		parameters[k] = v
+	}
+	if req.Seconds > 0 {
+		parameters["duration"] = req.Seconds
+	}
+	if req.AspectRatio != "" {
+		parameters["ratio"] = req.AspectRatio
+	}
+	if req.Seed != nil {
+		parameters["seed"] = *req.Seed
+	}
+	if req.Image != "" {
+		// 图生视频：文本与图片各占一个 content 片段。
+		content := body["content"].([]map[string]interface{})
+		body["content"] = append(content, map[string]interface{}{
+			"type":      "image_url",
+			"image_url": map[string]interface{}{"url": req.Image},
+		})
+	}
+	if len(parameters) > 0 {
+		body["parameters"] = parameters
+	}
+	return body
 }
 
 // buildOpenAIVideoRequest 构造 OpenAI 兼容的 /videos 请求体（Sora 风格）。
@@ -240,7 +341,22 @@ func parseOpenAIVideoTask(raw []byte) (*spec.VideoResponse, error) {
 			URL           string `json:"url"`
 			CoverImageURL string `json:"cover_image_url"`
 		} `json:"video_result"`
-		Data []struct {
+		// 百炼：任务 ID 与状态在 output 下，结果可能在 output.video_url 或 output.results[]。
+		Output *struct {
+			TaskID     string `json:"task_id"`
+			TaskStatus string `json:"task_status"`
+			VideoURL   string `json:"video_url"`
+			Results    []struct {
+				URL string `json:"url"`
+			} `json:"results"`
+		} `json:"output"`
+		// 火山方舟：结果地址在 content.video_url。
+		Content *struct {
+			VideoURL string `json:"video_url"`
+		} `json:"content"`
+		// 部分平台把任务 ID 直接放在顶层 task_id。
+		TaskID string `json:"task_id"`
+		Data   []struct {
 			URL       string `json:"url"`
 			B64JSON   string `json:"b64_json"`
 			MimeType  string `json:"mime_type"`
@@ -253,9 +369,26 @@ func parseOpenAIVideoTask(raw []byte) (*spec.VideoResponse, error) {
 		return nil, fmt.Errorf("解析视频任务响应失败: %w", err)
 	}
 
+	// 百炼把任务 ID 与状态放在 output 里（task_id / task_status），
+	// 火山方舟把视频地址放在 content.video_url 里，与 Sora 的平铺结构不同。
+	var (
+		outputID     string
+		outputStatus string
+		outputURL    string
+		contentURL   string
+	)
+	if resp.Output != nil {
+		outputID = resp.Output.TaskID
+		outputStatus = resp.Output.TaskStatus
+		outputURL = resp.Output.VideoURL
+	}
+	if resp.Content != nil {
+		contentURL = resp.Content.VideoURL
+	}
+
 	out := &spec.VideoResponse{
-		TaskID:   firstVideoID(resp.ID, resp.Object),
-		Status:   normalizeVideoStatus(firstVideoStatus(resp.Status, resp.TaskStatus)),
+		TaskID:   firstVideoID(resp.ID, resp.TaskID, outputID, resp.Object),
+		Status:   normalizeVideoStatus(firstVideoStatus(resp.Status, resp.TaskStatus, outputStatus)),
 		Progress: resp.Progress,
 		Seconds:  firstNonZero(secondsValue(resp.Seconds), parseIntOrZero(resp.SecondsText)),
 	}
@@ -271,8 +404,19 @@ func parseOpenAIVideoTask(raw []byte) (*spec.VideoResponse, error) {
 	// 直接带出结果的情况：单条字段或 data 数组。
 	if resp.B64JSON != "" {
 		out.Videos = append(out.Videos, spec.Video{Type: "inline_data", B64Data: resp.B64JSON, MimeType: "video/mp4", DurationSec: out.Seconds})
-	} else if url := firstVideoURL(resp.URL, resp.VideoURL, resp.DownloadURL); url != "" {
+	} else if url := firstVideoURL(resp.URL, resp.VideoURL, resp.DownloadURL, outputURL, contentURL); url != "" {
 		out.Videos = append(out.Videos, spec.Video{Type: "url", URL: url, MimeType: "video/mp4", DurationSec: out.Seconds})
+	}
+	// 百炼的部分模型把结果放在 output.results[] 里。
+	if resp.Output != nil {
+		for _, item := range resp.Output.Results {
+			if item.URL == "" {
+				continue
+			}
+			out.Videos = append(out.Videos, spec.Video{
+				Type: "url", URL: item.URL, MimeType: "video/mp4", DurationSec: out.Seconds,
+			})
+		}
 	}
 	// 智谱：结果随任务状态一起返回，不需要再调内容端点。
 	for _, item := range resp.VideoResult {

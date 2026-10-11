@@ -15,6 +15,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 	"github.com/whalegate/whalegate/internal/pkg/mcp"
 	"github.com/whalegate/whalegate/internal/pkg/util"
 	"github.com/whalegate/whalegate/internal/service"
@@ -207,7 +208,10 @@ func (h *RelayHandler) prepareUpstream(
 	upstreamReq := *req
 	upstreamReq.Model = upstreamModel
 
-	payload, err := gateway.BuildUpstreamRequest(channel.Type, &upstreamReq)
+	// 厂商档案决定字段命名与端点差异，按上游地址识别即可，无需额外配置。
+	vendorProfile := vendor.FromBaseURL(channel.BaseURL)
+
+	payload, err := gateway.BuildUpstreamRequest(channel.Type, &upstreamReq, vendorProfile)
 	if err != nil {
 		return "", nil, nil, "", gateway.ParamReport{}, apierr.Wrap(apierr.ErrInvalidParam, err)
 	}
@@ -230,10 +234,10 @@ func (h *RelayHandler) prepareUpstream(
 		return "", nil, nil, "", report, apierr.Wrap(apierr.ErrInternal, err)
 	}
 
-	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, req.Stream)
+	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamModel, req.Stream, vendorProfile)
 	// 必须用 BuildUpstreamHeaders：Anthropic / Claude Code 渠道还需要 anthropic-version，
 	// 只带鉴权头会被上游直接判 400。
-	headers := gateway.BuildUpstreamHeaders(channel.Type, apiKey)
+	headers := gateway.BuildUpstreamHeaders(channel.Type, apiKey, vendorProfile)
 	return url, headers, body, upstreamModel, report, nil
 }
 
@@ -262,10 +266,11 @@ func (h *RelayHandler) fetchUpstream(
 		return nil, report, upstreamModel, classifyUpstreamError(err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, report, upstreamModel, upstreamHTTPError(channel.Type, resp.StatusCode, raw)
+		return nil, report, upstreamModel,
+			upstreamHTTPError(channel.Type, vendor.FromBaseURL(channel.BaseURL), resp.StatusCode, raw)
 	}
 
-	unified, err := gateway.ParseUpstreamResponse(channel.Type, raw)
+	unified, err := gateway.ParseUpstreamResponse(channel.Type, raw, vendor.FromBaseURL(channel.BaseURL))
 	if err != nil {
 		return nil, report, upstreamModel, apierr.Wrap(apierr.ErrUpstreamInvalid, err)
 	}

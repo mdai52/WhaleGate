@@ -11,6 +11,10 @@ import "strings"
 // openai / gemini 既可作客户端入口也可作上游渠道；
 // anthropic / claude-code 目前只作为上游渠道类型使用，
 // 对外仍统一以 OpenAI 或 Gemini 协议输出（见 gateway.WriteClientResponse）。
+//
+// 判据是「上游是否说 OpenAI 协议」：说的一律用 openai，
+// 端点、鉴权与字段命名的差异由 vendor 档案表补齐；
+// 只有 Gemini、Anthropic 这类报文结构本身不同的上游才单列协议。
 const (
 	ProtocolOpenAI = "openai"
 	ProtocolGemini = "gemini"
@@ -23,6 +27,19 @@ const (
 // IsAnthropicLike 判断是否为 Anthropic 消息结构的协议。
 func IsAnthropicLike(protocol string) bool {
 	return protocol == ProtocolAnthropic || protocol == ProtocolClaudeCode
+}
+
+// IsOpenAILike 判断是否为 OpenAI 兼容协议族。
+//
+// Azure、千帆、百炼、Ollama 这些厂商说的就是 OpenAI 协议，只是端点、
+// 鉴权或字段命名不同，统一按 openai 处理，差异交给 vendor 档案表。
+func IsOpenAILike(protocol string) bool {
+	switch protocol {
+	case ProtocolOpenAI, "":
+		return true
+	default:
+		return false
+	}
 }
 
 // 消息角色。

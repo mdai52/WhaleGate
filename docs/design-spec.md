@@ -62,7 +62,8 @@
                 │
 ┌───────────────▼──────────────────────────────────────────────┐
 │ 适配层  Adapter Layer                                         │
-│  OpenAI 适配器   ·   Gemini 适配器   ·   Anthropic 适配器      │
+│  OpenAI 适配器 · Gemini 适配器 · Anthropic 适配器               │
+│  + 厂商档案（vendor）：端点 / 鉴权 / 字段命名 / 错误外壳         │
 └───────────────┬──────────────────────────────────────────────┘
                 │
 ┌───────────────▼──────────────────────────────────────────────┐
@@ -98,7 +99,7 @@
 │       ├── middleware/        # 鉴权 / 限流 / 日志 / 恢复
 │       ├── model/             # GORM 数据模型
 │       ├── pkg/               # 基础包
-│       │   ├── gateway/       # 协议适配（spec / openai / gemini / anthropic）
+│       │   ├── gateway/       # 协议适配（spec / openai / gemini / anthropic / vendor 厂商档案）
 │       │   ├── ratelimit/     # 限流器
 │       │   ├── crypto/ jwt/   # 加解密与令牌
 │       │   ├── cache/ database/ logger/ response/ apierr/
@@ -131,9 +132,42 @@
 ### 3.2 归一化层（协议适配核心）
 
 **唯一内部契约**：`internal/pkg/gateway/spec` 中的 `UnifiedRequest` / `UnifiedResponse`。
-任何协议的请求先转成它，任何渠道的响应也先转成它，因此 **OpenAI ↔ Gemini ↔ Anthropic 之间可以任意互转**。
+任何协议的请求先转成它，任何渠道的响应也先转成它，因此 **不同协议的上游之间可以任意互转**。
 上游为 Anthropic（含 Claude Code 网关）时，工具调用参数由 `input_json_delta` 分片下发，
 需按请求持有有状态的 `StreamDecoder` 跨事件累积后再整体下发。
+
+**渠道协议（出站）**由 `channels.type` 决定。判据是「上游是否说 OpenAI 协议」：
+说的一律用 `openai`，端点、鉴权与字段命名的差异由厂商档案补齐；
+只有 Gemini、Anthropic 这类报文结构本身不同的上游才单列协议。
+
+| 类型 | 适用上游 |
+| --- | --- |
+| `openai` | 绝大多数厂商与聚合平台（含 Azure、百炼、千帆、Ollama 的官方兼容端点） |
+| `gemini` | Google Gemini 原生 |
+| `anthropic` / `claude-code` | Anthropic Messages API 与 Claude Code 网关 |
+
+客户端协议（入站）由请求路径决定，与协议类型在统一格式上解耦。
+
+#### 3.2.0 厂商档案（vendor）
+
+同为 `openai` 类型的各家仍有细节差异。这些差异存在 **`vendor_profiles` 表**里
+（管理后台 → 厂商适配；迁移 000027 灌入 25 家已知厂商作为默认值），
+启动时灌入 `vendor` 包的内存存储，后台改动保存后立即重载。
+按上游地址识别厂商后自动生效，**不要求管理员额外配置**：
+
+| 维度 | 差异 |
+| --- | --- |
+| 端点与鉴权 | Azure 部署名路径 + `api-key` 头 + `api-version`；百炼自动补 `compatible-mode/v1`；Ollama 自动补 `/v1` |
+| 思维链字段 | `reasoning_content`（DeepSeek / 通义 / 智谱 / 硅基流动）、`reasoning`（OpenRouter / Groq）、`thinking`（Ollama） |
+| 输出上限 | `max_tokens` 或 `max_completion_tokens`（OpenAI o 系列 / gpt-5） |
+| usage 口径 | `prompt/completion_tokens` 或 `input/output_tokens`（百炼） |
+| 响应兜底 | 千帆老版端点的 `result` 正文与 `error_code/error_msg` |
+| 错误外壳 | `error.message` / `message` / `error_code+error_msg`（千帆） / `code+message`（百炼、讯飞） |
+| 流式 usage | 不认 `stream_options` 的厂商不下发该字段，改用估算口径计量 |
+| 视频端点 | Sora 风格 / 智谱 / 百炼万相 / 火山方舟 |
+| 生图端点 | OpenAI 形态；百炼自动补全 `compatible-mode/v1` 并把尺寸换成 `1024*1024` 写法 |
+
+识别只影响「差异字段怎么填」，猜错时退回通用 OpenAI 形态，不改变请求语义。
 
 #### 3.2.1 非标扩展归一
 

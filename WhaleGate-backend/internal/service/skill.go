@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -109,10 +110,59 @@ func (c *Container) ScanSkills(ctx context.Context, dir string) (int, error) {
 	if err != nil {
 		return 0, apierr.Wrap(apierr.ErrInternal, err)
 	}
+	return c.upsertSkills(ctx, parsed, "dir")
+}
+
+// ImportSkills 从压缩包内容导入 SKILL.md 并写入数据库（按 name 覆盖）。
+//
+// 体积与条目上限取自管理员配置（见 SkillsImportLimits），
+// 这样「包稍大一点」可以由管理员自助放宽，不必改代码重新发布。
+func (c *Container) ImportSkills(ctx context.Context, fileName string, data []byte) (int, error) {
+	limits := c.SkillsImportLimits()
+	if err := limits.CheckUpload(int64(len(data))); err != nil {
+		return 0, apierr.Wrap(apierr.ErrInvalidParam, err)
+	}
+	fallback := archiveBaseName(fileName)
+
+	var (
+		parsed []skills.Parsed
+		err    error
+	)
+	switch {
+	case strings.HasSuffix(strings.ToLower(fileName), ".zip"):
+		parsed, err = skills.ParseZip(data, fallback, limits)
+	case strings.HasSuffix(strings.ToLower(fileName), ".tar.gz"),
+		strings.HasSuffix(strings.ToLower(fileName), ".tgz"):
+		parsed, err = skills.ParseTarGz(data, fallback, limits)
+	default:
+		return 0, apierr.New(apierr.ErrInvalidParam, "只支持 .zip / .tar.gz / .tgz 压缩包")
+	}
+	if err != nil {
+		return 0, apierr.Wrap(apierr.ErrInvalidParam, err)
+	}
+	if len(parsed) == 0 {
+		return 0, apierr.New(apierr.ErrInvalidParam, "压缩包内没有找到 SKILL.md")
+	}
+	return c.upsertSkills(ctx, parsed, "archive")
+}
+
+// archiveBaseName 用压缩包文件名作为无上级目录时的技能名兜底。
+func archiveBaseName(fileName string) string {
+	base := path.Base(strings.ReplaceAll(fileName, "\\", "/"))
+	for _, suffix := range []string{".tar.gz", ".tgz", ".zip"} {
+		if strings.HasSuffix(strings.ToLower(base), suffix) {
+			base = base[:len(base)-len(suffix)]
+			break
+		}
+	}
+	return strings.TrimSpace(base)
+}
+
+// upsertSkills 把解析结果按 name 覆盖写入数据库。
+func (c *Container) upsertSkills(ctx context.Context, parsed []skills.Parsed, source string) (int, error) {
 	if len(parsed) == 0 {
 		return 0, nil
 	}
-
 	now := time.Now()
 	rows := make([]model.Skill, 0, len(parsed))
 	for _, p := range parsed {
@@ -130,7 +180,7 @@ func (c *Container) ScanSkills(ctx context.Context, dir string) (int, error) {
 			Content:     p.Content,
 			Mode:        mode,
 			Enabled:     true,
-			Source:      "dir",
+			Source:      source,
 			FilePath:    p.FilePath,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -140,7 +190,7 @@ func (c *Container) ScanSkills(ctx context.Context, dir string) (int, error) {
 		return 0, nil
 	}
 
-	err = c.DB.WithContext(ctx).Clauses(clause.OnConflict{
+	err := c.DB.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "name"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"display_name", "description", "content", "mode", "file_path", "updated_at",

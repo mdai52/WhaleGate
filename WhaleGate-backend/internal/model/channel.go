@@ -22,7 +22,12 @@ const (
 )
 
 // 渠道协议类型。
+//
+// 判据是「上游是否说 OpenAI 协议」：说的一律用 openai，
+// 端点、鉴权与字段命名的差异由 vendor 档案表按上游地址自动补齐，
+// 因此这里不再为单个厂商单列协议类型。
 const (
+	// ChannelTypeOpenAI OpenAI 兼容（含各家官方兼容端点）。
 	ChannelTypeOpenAI = "openai"
 	ChannelTypeGemini = "gemini"
 	// ChannelTypeAnthropic Anthropic Messages API（x-api-key 鉴权）。

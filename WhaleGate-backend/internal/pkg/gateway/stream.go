@@ -3,6 +3,7 @@ package gateway
 import (
 	"github.com/whalegate/whalegate/internal/pkg/gateway/anthropic"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 )
 
 // StreamDecoder 流式事件解码器。
@@ -18,17 +19,20 @@ type StreamDecoder interface {
 // statelessDecoder 把无状态解析函数包装成 StreamDecoder。
 type statelessDecoder struct {
 	channelType string
+	vendor      *vendor.Vendor
 }
 
 // Decode 调用协议对应的无状态解析器。
 func (d statelessDecoder) Decode(payload []byte) (*spec.StreamChunk, error) {
-	return ParseUpstreamStreamEvent(d.channelType, payload)
+	return ParseUpstreamStreamEvent(d.channelType, payload, d.vendor)
 }
 
 // NewStreamDecoder 创建一次转发所需的流式解码器。
-func NewStreamDecoder(channelType string) StreamDecoder {
+//
+// v 为厂商档案：OpenAI 兼容厂商的思维链字段名不同，解码时要按厂商取值。
+func NewStreamDecoder(channelType string, v *vendor.Vendor) StreamDecoder {
 	if IsAnthropicLike(channelType) {
 		return anthropic.NewStreamDecoder()
 	}
-	return statelessDecoder{channelType: channelType}
+	return statelessDecoder{channelType: channelType, vendor: v}
 }

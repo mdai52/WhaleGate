@@ -17,6 +17,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 	"github.com/whalegate/whalegate/internal/pkg/util"
 	"github.com/whalegate/whalegate/internal/service"
 )
@@ -484,7 +485,11 @@ func (h *RelayHandler) forward(
 	upstreamReq := *req
 	upstreamReq.Model = upstreamModel
 
-	payload, err := gateway.BuildUpstreamRequest(channel.Type, &upstreamReq)
+	// 厂商档案：同一套 OpenAI 兼容协议之上，各家的字段命名与端点并不一致
+	//（思维链字段名、usage 口径、错误外壳），按上游地址识别后贯穿整条转发链路。
+	vendorProfile := vendor.FromBaseURL(channel.BaseURL)
+
+	payload, err := gateway.BuildUpstreamRequest(channel.Type, &upstreamReq, vendorProfile)
 	if err != nil {
 		return nil, apierr.Wrap(apierr.ErrInvalidParam, err)
 	}
@@ -513,8 +518,10 @@ func (h *RelayHandler) forward(
 	}
 
 	upstreamReqModel := upstreamReq.Model
-	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamReqModel, req.Stream)
-	headers := gateway.BuildUpstreamHeaders(channel.Type, apiKey)
+	url := gateway.BuildUpstreamURL(channel.Type, channel.BaseURL, upstreamReqModel, req.Stream, vendorProfile)
+	// 流式要走另一个入口：百炼这类厂商流式与非流式的请求头不同，
+	// 少了 X-DashScope-SSE 会退化成一次性响应。
+	headers := gateway.BuildUpstreamHeadersFor(channel.Type, apiKey, vendorProfile, req.Stream)
 
 	upstream := gateway.NewUpstream(channelTimeout(h.svc, channel))
 	if req.Stream {
@@ -546,10 +553,10 @@ func (h *RelayHandler) forwardOnce(
 		return nil, classifyUpstreamError(err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, upstreamHTTPError(channel.Type, resp.StatusCode, raw)
+		return nil, upstreamHTTPError(channel.Type, vendor.FromBaseURL(channel.BaseURL), resp.StatusCode, raw)
 	}
 
-	unified, err := gateway.ParseUpstreamResponse(channel.Type, raw)
+	unified, err := gateway.ParseUpstreamResponse(channel.Type, raw, vendor.FromBaseURL(channel.BaseURL))
 	if err != nil {
 		return nil, apierr.Wrap(apierr.ErrUpstreamInvalid, err)
 	}
@@ -594,15 +601,16 @@ func (h *RelayHandler) forwardStream(
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-		return nil, upstreamHTTPError(channel.Type, resp.StatusCode, raw)
+		return nil, upstreamHTTPError(channel.Type, vendor.FromBaseURL(channel.BaseURL), resp.StatusCode, raw)
 	}
 
 	gateway.WriteClientStreamHeader(clientProtocol, c)
 	flusher, _ := c.Writer.(http.Flusher)
 
+	// 按协议选择分帧方式：OpenAI 系是 SSE，Ollama 是 NDJSON。
 	scanner := gateway.NewSSEScanner(resp.Body)
 	// 按协议选择解码器：Anthropic 的工具参数分片下发，解码器需贯穿整个流。
-	decoder := gateway.NewStreamDecoder(channel.Type)
+	decoder := gateway.NewStreamDecoder(channel.Type, vendor.FromBaseURL(channel.BaseURL))
 	// 客户端侧同样需要状态：Anthropic 入站的 SSE 是严格有序的事件序列。
 	encoder := gateway.NewClientStreamEncoder(clientProtocol, c.Writer)
 	usage := &gateway.Usage{}
@@ -698,8 +706,8 @@ func classifyUpstreamError(err error) error {
 	return apierr.Wrap(apierr.ErrUpstream, err)
 }
 
-func upstreamHTTPError(channelType string, status int, raw []byte) error {
-	msg := gateway.ExtractUpstreamError(channelType, raw)
+func upstreamHTTPError(channelType string, v *vendor.Vendor, status int, raw []byte) error {
+	msg := gateway.ExtractUpstreamError(channelType, raw, v)
 	if msg == "" {
 		msg = strings.TrimSpace(string(raw))
 	}

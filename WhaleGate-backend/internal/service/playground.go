@@ -8,6 +8,7 @@ import (
 	"github.com/whalegate/whalegate/internal/pkg/apierr"
 	"github.com/whalegate/whalegate/internal/pkg/gateway"
 	"github.com/whalegate/whalegate/internal/pkg/gateway/spec"
+	"github.com/whalegate/whalegate/internal/pkg/gateway/vendor"
 	"github.com/whalegate/whalegate/internal/pkg/util"
 )
 
@@ -146,7 +147,7 @@ func (c *Container) PreviewParams(ctx context.Context, in ParamPreviewInput) (*P
 		Messages: []spec.Message{{Role: "user", Content: prompt}},
 		Extra:    in.Params,
 	}
-	payload, err := gateway.BuildUpstreamRequest(channel.Type, unified)
+	payload, err := gateway.BuildUpstreamRequest(channel.Type, unified, vendor.FromBaseURL(channel.BaseURL))
 	if err != nil {
 		return nil, apierr.Wrap(apierr.ErrInvalidParam, err)
 	}

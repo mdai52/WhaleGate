@@ -64,7 +64,7 @@ func TestUpstreamHTTPError(t *testing.T) {
 		{http.StatusBadGateway, `bad gateway`, apierr.CodeUpstream},
 	}
 	for _, c := range cases {
-		err := upstreamHTTPError(gateway.ProtocolOpenAI, c.status, []byte(c.body))
+		err := upstreamHTTPError(gateway.ProtocolOpenAI, nil, c.status, []byte(c.body))
 		if apierr.CodeOf(err) != c.code {
 			t.Errorf("status %d 期望码 %d，实际 %d", c.status, c.code, apierr.CodeOf(err))
 		}
@@ -72,7 +72,7 @@ func TestUpstreamHTTPError(t *testing.T) {
 }
 
 func TestUpstreamHTTPErrorGemini(t *testing.T) {
-	err := upstreamHTTPError(gateway.ProtocolGemini, 400, []byte(`{"error":{"message":"API key not valid"}}`))
+	err := upstreamHTTPError(gateway.ProtocolGemini, nil, 400, []byte(`{"error":{"message":"API key not valid"}}`))
 	if apierr.CodeOf(err) != apierr.CodeUpstream {
 		t.Fatalf("期望上游错误，实际 %v", err)
 	}

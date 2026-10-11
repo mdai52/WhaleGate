@@ -18,6 +18,8 @@ import {
   MenuUnfoldOutlined,
   PercentageOutlined,
   PictureOutlined,
+  GlobalOutlined,
+  HighlightOutlined,
   SafetyCertificateOutlined,
   SafetyOutlined,
   SettingOutlined,
@@ -61,11 +63,13 @@ const menus = computed<MenuItem[]>(() => {
     { key: '/account', label: '账号与安全', icon: 'UserOutlined', group: '用户门户' },
     { key: '/studio', label: 'AI 绘图', icon: 'PictureOutlined', group: '创意' },
     { key: '/video-studio', label: '视频工作台', icon: 'VideoCameraOutlined', group: '创意' },
+    { key: '/canvas', label: '画布工作台', icon: 'HighlightOutlined', group: '创意' },
   ]
   if (userStore.isAdmin) {
     list.push(
       { key: '/admin/users', label: '用户管理', icon: 'TeamOutlined', group: '管理后台' },
       { key: '/admin/channels', label: '渠道管理', icon: 'ApiOutlined', group: '管理后台' },
+      { key: '/admin/vendors', label: '厂商适配', icon: 'GlobalOutlined', group: '管理后台' },
       { key: '/admin/ratios', label: '倍率配置', icon: 'PercentageOutlined', group: '管理后台' },
       { key: '/admin/groups', label: '分组管理', icon: 'ClusterOutlined', group: '管理后台' },
       { key: '/admin/logs', label: '全局日志', icon: 'FileSearchOutlined', group: '管理后台' },
@@ -105,6 +109,8 @@ const iconMap: Record<string, unknown> = {
   DashboardOutlined,
   ExperimentOutlined,
   FileSearchOutlined,
+  GlobalOutlined,
+  HighlightOutlined,
   HistoryOutlined,
   IdcardOutlined,
   KeyOutlined,
@@ -114,6 +120,7 @@ const iconMap: Record<string, unknown> = {
   SafetyOutlined,
   SettingOutlined,
   TeamOutlined,
+  UserOutlined,
   VideoCameraOutlined,
 }
 
